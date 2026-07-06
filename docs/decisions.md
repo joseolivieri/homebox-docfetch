@@ -20,13 +20,23 @@ Format: decisions are immutable once logged (append a new entry to reverse one).
 | D11 | Warranty: set hard `warrantyExpires` only when confidently found; else estimate into `warrantyDetails`, leave `warrantyExpires` null. | Keep date fields trustworthy; no fabricated expiries from guesses. |
 | D12 | Deploy as a new `ansible/roles/docfetch/` role following the `homebox` role pattern; secrets in vault; update `docs/architecture.md` in the landing commit. | Homelab conventions (repo CLAUDE.md). |
 
-## Open questions (BLOCKING)
+## Resolved (were blocking)
 
-| # | Question | Blocks | Default if unanswered |
-|---|---|---|---|
-| Q1 | **Homebox API token** — provide a scoped token (Homebox → user settings), or walk through creating one. Needed to also pin the live `entityTypeId` for "Item" and confirm attachment behavior. | P1-02 (client), all live testing | — none; hard blocker |
-| Q2 | **OpenRouter key** — reuse the Norish/Sparky key, or a **separate key** to isolate this $5 budget? | P1-05 (rerank), P2 vision | Recommend separate key (clean cost attribution). |
-| Q3 | **Scheduler confidence gate** — confirm **review-gate via ntfy** (low-confidence → notify, don't attach) vs auto-attach best guess. | P1-06 (gate) | Recommend review-gate. |
+| # | Question | Resolution |
+|---|---|---|
+| Q1 | Homebox API token | Provided. Stored in vault as `docfetch_homebox_token`. Auth = `Authorization: Bearer <token>`. Verified live 2026-07-06. |
+| Q2 | OpenRouter key isolation | **Separate key** (no prior OpenRouter key existed in vault). Stored as `docfetch_openrouter_api_key`. |
+| Q3 | Scheduler confidence gate | **ntfy review-gate** confirmed — low-confidence notifies, does not attach. |
+
+## Live API findings (verified against the instance 2026-07-06 — supersede earlier assumptions)
+
+- **No "Item" entity-type exists.** Only one entity-type: `Location` (`isLocation:true`, id `e27d5012-5190-406e-80e0-36a3d0429de4`).
+  → Items are created with **no `entityTypeId`**. The startup step does NOT resolve an "Item" type (P1-03 simplified).
+  → For the Phase-2 location dropdown, list entities of the `Location` type (`isLocation:true`).
+- **`GET /v1/entities` wrapper:** `{page,pageSize,total,items:[...],totalPrice}` — items under `.items`, not a bare array.
+- **Collection is currently empty** (`total:0`; instance created 2026-06-27). Scheduler no-ops until items exist; Phase-2 portal will populate it. Do not treat "0 results" as an error.
+- **Tags already seeded** (Appliances, Electronics, General, …). Our `docfetch/unverified` + `source/docfetch` tags do not exist yet → bootstrap creates them.
+- **Secret → env mapping** (Ansible role injects vault → container env): `docfetch_homebox_token → HOMEBOX_TOKEN`, `docfetch_openrouter_api_key → OPENROUTER_API_KEY`.
 
 ## Deferred / future (not in scope now)
 

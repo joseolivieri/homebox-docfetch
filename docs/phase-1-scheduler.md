@@ -33,7 +33,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Deps: P1-01, Q1.
 
 - [ ] **P1-03 · Startup bootstrap**
-  - Intent: resolve `item_entity_type` name → id; ensure `unverified_tag`/`provenance_tag` exist (create if missing) → ids.
+  - Intent: ensure `unverified_tag`/`provenance_tag` exist (create via `POST /v1/tags` if missing) → cache ids.
+    (No "Item" entity-type to resolve — items are created with no `entityTypeId`; see spec §6 / decisions live-findings.)
   - Files: `internal/homebox/` (bootstrap), wired from `scheduler`.
   - Acceptance: on first run creates missing tags; on subsequent runs is a no-op; ids cached for the process.
   - Deps: P1-02.

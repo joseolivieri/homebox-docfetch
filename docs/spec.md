@@ -118,9 +118,8 @@ attach:
   skip_if_manual_exists: true
 
 intake:                            # tags-based triage (labels are "tags" in this fork)
-  item_entity_type: "Item"         # resolved -> entityTypeId at startup
-  unverified_tag: "docfetch/unverified"
-  provenance_tag: "source/docfetch"
+  unverified_tag: "docfetch/unverified"   # created at startup if missing
+  provenance_tag: "source/docfetch"       # items created with no entityTypeId (no "Item" type exists)
 
 reconcile:
   digest_schedule: "0 9 * * 1"     # weekly GET entities?tags=<unverified> -> ntfy count
@@ -146,7 +145,8 @@ Base path `/api/v1`. Bearer token auth.
 
 ### Entities (items are entities of a given entity-type)
 - `GET  /v1/entities` — list. Query: `q`, `page`, `pageSize`, `tags`, `parentIds`.
-  Returns `EntitySummary`: `id, name, description, entityType, tags[], parent, assetId, imageId,
+  Wrapper: `{page, pageSize, total, items:[...], totalPrice}` — results under `.items`. `total:0` is valid, not an error.
+  Each item is an `EntitySummary`: `id, name, description, entityType, tags[], parent, assetId, imageId,
   thumbnailId, quantity, insured, archived, itemCount, purchasePrice, createdAt, updatedAt`.
   → Use `updatedAt` for change detection; `imageId`/`thumbnailId` to know if a product photo exists.
 - `POST /v1/entities` — create. Body `EntityCreate`, **required: `name` only.**
@@ -166,7 +166,9 @@ There is no `locationId`. "Location" is an entity (its own entity-type); an item
 
 ### Entity types
 - `GET /v1/entity-types`, `GET/PUT/DELETE /v1/entity-types/{id}`, create via `EntityTypeCreate`.
-  → Resolve the "Item" (and Phase 2 "Location") type id at startup; config carries the names.
+- **Live reality (verified 2026-07-06):** only a `Location` type exists (`isLocation:true`). **There is no "Item" type.**
+  Items are created with **no `entityTypeId`**. Do NOT try to resolve an "Item" type at startup.
+  Phase-2 location dropdown = entities whose entity-type has `isLocation:true`.
 
 ### Tags (this fork's "labels")
 - `GET /v1/tags` (list), `POST /v1/tags` (`TagCreate`, required `name`; has `color, icon, parentId`),
