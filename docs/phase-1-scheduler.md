@@ -46,7 +46,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Acceptance: schema migrates on boot; upsert + query by status; survives restart at `state_db` path.
   - Deps: P1-01.
 
-- [ ] **P1-05 · Discovery pipeline** *(LLM step blocked by Q2)*
+- [x] **P1-05 · Discovery pipeline** *(LLM step blocked by Q2)*
   - Intent: build queries from `{manufacturer, modelNumber, name}` → SearXNG → candidates
     `{title,url,snippet}` → rules filter/score (model# match, `application/pdf` via HEAD, size sanity) →
     if ambiguous, OpenRouter rerank (`internal/llm`, JSON out `{best,confidence}`, snippet≤150) → confidence score.
