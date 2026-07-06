@@ -1,0 +1,8 @@
+# local runtime config (may contain resolved secrets / local paths)
+config.yaml
+# state
+*.db
+data/
+# build output
+/docfetch
+/dist/

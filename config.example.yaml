@@ -1,0 +1,58 @@
+# homebox-docfetch property file (example). See docs/spec.md §5.
+# ${VAR} values are replaced from the environment at load time (secrets).
+
+homebox:
+  url: https://homebox.jentaculum.net
+  token: ${HOMEBOX_TOKEN}
+  page_size: 100
+
+schedule:
+  scan_new: "0 */6 * * *"          # discover + initial fetch on new items
+  followup: "0 4 * * 0"            # weekly re-check known items for new/updated docs
+  followup_after: 720h             # only re-check items whose last fetch is older than this
+
+discovery:
+  searxng_url: http://searxng:8080
+  queries:
+    - "{manufacturer} {modelNumber} user manual filetype:pdf"
+    - "{manufacturer} {modelNumber} datasheet pdf"
+  max_candidates: 8
+  min_pdf_bytes: 20000
+  max_pdf_bytes: 52428800
+  rate_limit_per_min: 20
+  backoff_base: 24h
+
+llm:
+  base_url: https://openrouter.ai/api/v1
+  api_key: ${OPENROUTER_API_KEY}
+  rerank_model: "meta-llama/llama-3.1-8b-instruct"
+  vision_model: "google/gemini-2.0-flash-lite-001"
+  max_snippet_chars: 150
+
+confidence:
+  auto_attach_threshold: 0.7
+  require_model_match: true
+
+attach:
+  doc_type: manual
+  skip_if_manual_exists: true
+
+intake:
+  unverified_tag: "docfetch/unverified"
+  provenance_tag: "source/docfetch"
+
+reconcile:
+  digest_schedule: "0 9 * * 1"
+
+notify:
+  ntfy_url: http://ntfy:8080
+  ntfy_topic: homelab
+
+portal:
+  listen: ":8099"
+  location_entity_type: "Location"
+  default_location: null
+  intake_photos: [sticker, receipt]
+  warranty_estimate: true
+
+state_db: /data/docfetch.db

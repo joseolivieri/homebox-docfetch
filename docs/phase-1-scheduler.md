@@ -11,19 +11,19 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ---
 
-- [ ] **P1-00 · Scaffold module & repo skeleton**
+- [x] **P1-00 · Scaffold module & repo skeleton**
   - Intent: Go module, dir layout per README, `config.example.yaml`, empty package stubs, Makefile/build.
   - Files: `go.mod`, `cmd/docfetch/main.go`, `internal/{config,homebox,store,discovery,llm,notify,scheduler}/`, `config.example.yaml`.
   - Acceptance: `go build ./...` succeeds; `docfetch --help` lists `scheduler|once|portal` subcommands.
   - Deps: none.
 
-- [ ] **P1-01 · Config loader**
+- [x] **P1-01 · Config loader**
   - Intent: load YAML property file, env-interpolate `${VAR}`, validate, typed struct matching spec §5.
   - Files: `internal/config/`.
   - Acceptance: loads `config.example.yaml`; missing required/invalid cron → clear error; secrets resolved from env.
   - Deps: P1-00.
 
-- [ ] **P1-02 · Homebox API client** *(blocked by Q1)*
+- [x] **P1-02 · Homebox API client** *(blocked by Q1)*
   - Intent: typed client for the entity model — `ListEntities(page,tags)`, `GetEntity(id)`, `CreateEntity`,
     `PatchEntity`, `UploadAttachment(id,file,name,type,primary)`, `ListTags`/`CreateTag`, `ListEntityTypes`.
     Bearer auth. Create+Patch included now for Phase-2 reuse even though scheduler only lists+attaches.
@@ -32,7 +32,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
     entity; tag create/list idempotent. Attachment dedupe reads `EntityOut.attachments`.
   - Deps: P1-01, Q1.
 
-- [ ] **P1-03 · Startup bootstrap**
+- [x] **P1-03 · Startup bootstrap**
   - Intent: ensure `unverified_tag`/`provenance_tag` exist (create via `POST /v1/tags` if missing) → cache ids.
     (No "Item" entity-type to resolve — items are created with no `entityTypeId`; see spec §6 / decisions live-findings.)
   - Files: `internal/homebox/` (bootstrap), wired from `scheduler`.
