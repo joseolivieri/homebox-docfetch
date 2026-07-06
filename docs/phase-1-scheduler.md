@@ -39,7 +39,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Acceptance: on first run creates missing tags; on subsequent runs is a no-op; ids cached for the process.
   - Deps: P1-02.
 
-- [ ] **P1-04 · SQLite state store**
+- [x] **P1-04 · SQLite state store**
   - Intent: persist per-entity record `{entity_id, name, meta_hash, updatedAt, status, doc_sha256, doc_url,
     attempts, first_seen, last_checked, last_attached}`. Drives idempotency, backoff, change detection.
   - Files: `internal/store/`.
