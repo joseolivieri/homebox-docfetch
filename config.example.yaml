@@ -42,6 +42,18 @@ intake:
   unverified_tag: "docfetch/unverified"
   provenance_tag: "source/docfetch"
 
+# Metadata auto-completion (Phase 1.5). Fill-only: never overwrites human data.
+# A field writes only when >=min_agreeing_sources domains corroborate it AND the
+# back-check round-trip passes AND confidence >= auto_write_threshold.
+enrich:
+  enabled: true
+  fill_only: true
+  auto_write_threshold: 0.85
+  min_agreeing_sources: 2
+  back_check: true
+  fields: [manufacturer, modelNumber, name, category]
+  provenance_note: true
+
 reconcile:
   digest_schedule: "0 9 * * 1"
 

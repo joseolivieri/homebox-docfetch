@@ -25,6 +25,7 @@ type EntityAPI interface {
 	ListEntities(ctx context.Context, page, pageSize int, tagIDs []string) (*homebox.EntityListResult, error)
 	GetEntity(ctx context.Context, id string) (*homebox.EntityOut, error)
 	PatchEntity(ctx context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error)
+	PutEntity(ctx context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error)
 	UploadAttachment(ctx context.Context, id, filename, attType string, primary bool, r io.Reader) (*homebox.EntityOut, error)
 	EnsureTag(ctx context.Context, name string) (string, error)
 }
@@ -54,11 +55,12 @@ type Config struct {
 }
 
 type Scanner struct {
-	api   EntityAPI
-	disc  Discoverer
-	ntfy  Notifier
-	store *store.Store
-	cfg   Config
+	api      EntityAPI
+	disc     Discoverer
+	ntfy     Notifier
+	store    *store.Store
+	cfg      Config
+	enricher Enricher // nil = enrichment disabled
 
 	unverifiedTagID string
 }
@@ -75,6 +77,9 @@ func NewScanner(api EntityAPI, disc Discoverer, n Notifier, st *store.Store, cfg
 	}
 	return &Scanner{api: api, disc: disc, ntfy: n, store: st, cfg: cfg}
 }
+
+// SetEnricher enables metadata enrichment (Phase 1.5).
+func (s *Scanner) SetEnricher(e Enricher) { s.enricher = e }
 
 // bootstrap resolves the unverified tag id once.
 func (s *Scanner) bootstrap(ctx context.Context) error {
@@ -145,7 +150,16 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		base.Attempts = rec.Attempts
 	}
 
-	// Already has a manual -> consider it done.
+	// Enrich first — independent of doc state: an item with a manual can still
+	// lack metadata, and a filled model# upgrades the doc search below.
+	if enriched, err := s.enrichEntity(ctx, detail); err != nil {
+		log.Printf("enrich failed for %q (continuing to doc-fetch): %v", detail.Name, err)
+	} else {
+		detail = enriched
+		base.MetaHash = store.MetaHash(detail.Manufacturer, detail.ModelNumber, detail.Name)
+	}
+
+	// Already has a manual -> doc-fetch is done.
 	if s.cfg.SkipIfManualExists && hasManual(detail) {
 		log.Printf("skip %q — manual already present", detail.Name)
 		base.Status = store.StatusAttached

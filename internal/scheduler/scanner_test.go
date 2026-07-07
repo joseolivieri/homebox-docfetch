@@ -20,6 +20,7 @@ type fakeAPI struct {
 	details  map[string]*homebox.EntityOut
 	uploads  int
 	patches  int
+	puts     int
 	lastTags []string
 }
 
@@ -36,6 +37,18 @@ func (f *fakeAPI) PatchEntity(_ context.Context, id string, in homebox.EntityUpd
 	f.patches++
 	f.lastTags = in.TagIDs
 	return f.details[id], nil
+}
+func (f *fakeAPI) PutEntity(_ context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error) {
+	f.puts++
+	f.lastTags = in.TagIDs
+	d := f.details[id]
+	if in.Manufacturer != nil {
+		d.Manufacturer = *in.Manufacturer
+	}
+	if in.ModelNumber != nil {
+		d.ModelNumber = *in.ModelNumber
+	}
+	return d, nil
 }
 func (f *fakeAPI) UploadAttachment(_ context.Context, id, name, t string, p bool, r io.Reader) (*homebox.EntityOut, error) {
 	f.uploads++

@@ -6,6 +6,7 @@ import (
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/enrich"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notify"
@@ -52,6 +53,23 @@ func build(cfg *config.Config) (*scheduler.Scanner, *store.Store, error) {
 		UnverifiedTag:       cfg.Intake.UnverifiedTag,
 		HomeboxURL:          cfg.Homebox.URL,
 	})
+
+	// Metadata enrichment (Phase 1.5) needs both search and an LLM extractor.
+	if cfg.Enrich.Enabled {
+		if xr, ok := rr.(*llm.Client); ok {
+			sc.SetEnricher(enrich.New(enrich.Options{
+				Enabled:            true,
+				FillOnly:           cfg.Enrich.FillOnly,
+				AutoWriteThreshold: cfg.Enrich.AutoWriteThreshold,
+				MinAgreeingSources: cfg.Enrich.MinAgreeingSources,
+				BackCheck:          cfg.Enrich.BackCheck,
+				Fields:             cfg.Enrich.Fields,
+				MaxSnippetChars:    cfg.LLM.MaxSnippetChars,
+			}, eng, xr))
+		} else {
+			log.Println("enrich.enabled=true but no LLM key configured; enrichment disabled")
+		}
+	}
 	return sc, st, nil
 }
 

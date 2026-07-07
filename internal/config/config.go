@@ -25,11 +25,23 @@ type Config struct {
 	Confidence Confidence `yaml:"confidence"`
 	Attach     Attach     `yaml:"attach"`
 	Intake     Intake     `yaml:"intake"`
+	Enrich     Enrich     `yaml:"enrich"`
 	Reconcile  Reconcile  `yaml:"reconcile"`
 	Notify     Notify     `yaml:"notify"`
 	Portal     Portal     `yaml:"portal"`
 	Vision     Vision     `yaml:"vision"`
 	StateDB    string     `yaml:"state_db"`
+}
+
+// Enrich configures metadata auto-completion (Phase 1.5). Fill-only by design.
+type Enrich struct {
+	Enabled            bool     `yaml:"enabled"`
+	FillOnly           bool     `yaml:"fill_only"`
+	AutoWriteThreshold float64  `yaml:"auto_write_threshold"`
+	MinAgreeingSources int      `yaml:"min_agreeing_sources"`
+	BackCheck          bool     `yaml:"back_check"`
+	Fields             []string `yaml:"fields"`
+	ProvenanceNote     bool     `yaml:"provenance_note"`
 }
 
 type Homebox struct {

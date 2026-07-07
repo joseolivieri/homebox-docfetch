@@ -19,6 +19,10 @@ Format: decisions are immutable once logged (append a new entry to reverse one).
 | D10 | Phase 2 intake supports **model sticker and/or receipt**, single multimodal call. Receipt fills purchase block + attaches as `type=receipt`. | Maps 1:1 to native fields; one call is cheaper and shares context. |
 | D11 | Warranty: set hard `warrantyExpires` only when confidently found; else estimate into `warrantyDetails`, leave `warrantyExpires` null. | Keep date fields trustworthy; no fabricated expiries from guesses. |
 | D12 | Deploy as a new `ansible/roles/docfetch/` role following the `homebox` role pattern; secrets in vault; update `docs/architecture.md` in the landing commit. | Homelab conventions (repo CLAUDE.md). |
+| D13 | Metadata enrichment (Phase 1.5) is **fill-only**: machine writes only empty fields, never overwrites human-entered values. | Eliminates the worst failure mode (corrupting curated data) outright. |
+| D14 | Enrichment confidence = **corroboration**: ≥2 independent domains agree + back-check round-trip passes. LLM self-scores alone never authorize a write. | LLM confidence is uncalibrated; agreement + round-trip search is verifiable evidence. |
+| D15 | Per-field gating with provenance: each field gates independently; every machine write appends a `docfetch:` note + keeps `docfetch/unverified` until human-blessed; full audit in SQLite `enrichments` table (undo-able). | Trust and reversibility; machine data always distinguishable from human data. |
+| D16 | Enrich runs **before** doc-fetch in the same scan pass; all metadata writes via `PutEntity` (fetch→merge→PUT). | Filled model# upgrades the manual query in the same cycle; PATCH silently drops scalar metadata. |
 
 ## Resolved (were blocking)
 
