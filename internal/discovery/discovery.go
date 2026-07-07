@@ -104,6 +104,10 @@ func NewEngine(opt Options, reranker Reranker) *Engine {
 	}
 }
 
+// browserUA: several vendor CDNs (HubSpot et al.) 403 Go's default UA on GET
+// while allowing browsers — observed live (lp.ankerjapan.com).
+const browserUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
 func norm(s string) string { return nonAlnum.ReplaceAllString(strings.ToLower(s), "") }
@@ -267,6 +271,7 @@ func (e *Engine) head(ctx context.Context, url string) (contentType string, size
 	if err != nil {
 		return "", 0
 	}
+	req.Header.Set("User-Agent", browserUA)
 	resp, err := e.http.Do(req)
 	if err != nil {
 		return "", 0

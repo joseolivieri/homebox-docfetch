@@ -15,6 +15,7 @@ func (e *Engine) Download(ctx context.Context, url string, maxBytes int64) ([]by
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", browserUA)
 	resp, err := e.http.Do(req)
 	if err != nil {
 		return nil, err

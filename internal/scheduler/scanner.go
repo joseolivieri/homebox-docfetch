@@ -226,7 +226,7 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	switch {
 	case res.Best != nil && res.Confidence >= s.cfg.AutoAttachThreshold:
 		log.Printf("attach %q — conf=%.2f llm=%v url=%s", detail.Name, res.Confidence, res.UsedLLM, res.Best.URL)
-		return s.attach(ctx, detail, res.Best, rec, base)
+		return s.attach(ctx, detail, res, rec, base)
 	case res.Best != nil:
 		log.Printf("review-gate %q — conf=%.2f (below %.2f) url=%s", detail.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
 		return s.reviewGate(ctx, detail, res, base)
@@ -237,11 +237,18 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	}
 }
 
-// attach downloads, dedupes by content hash, uploads as a manual.
-func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, best *discovery.Candidate, rec, base *store.Record) error {
+// attach downloads, dedupes by content hash, uploads as a manual. When the
+// chosen candidate's download fails (bot-blocked vendor CDNs, dead links), it
+// falls back to the next-best scored PDF candidates instead of failing the item.
+func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, rec, base *store.Record) error {
+	best := res.Best
 	data, err := s.disc.Download(ctx, best.URL, s.cfg.MaxPDFBytes)
 	if err != nil {
-		return err
+		log.Printf("download failed for %q (%v); trying fallback candidates", detail.Name, err)
+		best, data = s.downloadFallback(ctx, res)
+		if best == nil {
+			return err // keep the original cause; item retries later
+		}
 	}
 	sha := store.DocSHA(data)
 	base.DocURL = best.URL
@@ -370,6 +377,29 @@ func (s *Scanner) recordError(ctx context.Context, sum *homebox.EntitySummary, c
 		base.Attempts = rec.Attempts + 1
 	}
 	_ = s.store.Upsert(ctx, base)
+}
+
+// downloadFallback tries the remaining PDF candidates in score order.
+func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result) (*discovery.Candidate, []byte) {
+	tried := 0
+	for i := range res.Candidates {
+		c := &res.Candidates[i]
+		if c == res.Best || !c.IsPDF || c.Score <= 0 {
+			continue
+		}
+		if tried >= 2 { // cap fallback attempts
+			break
+		}
+		tried++
+		data, err := s.disc.Download(ctx, c.URL, s.cfg.MaxPDFBytes)
+		if err != nil {
+			log.Printf("fallback download failed (%s): %v", c.URL, err)
+			continue
+		}
+		log.Printf("fallback candidate succeeded: %s", c.URL)
+		return c, data
+	}
+	return nil, nil
 }
 
 func hasManual(detail *homebox.EntityOut) bool {
