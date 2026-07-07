@@ -28,6 +28,8 @@
     background:#3d7eff; color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
   button.primary:disabled { opacity:.45; }
   .hint { font-size:.75rem; color:#6d7380; margin-top:8px; }
+  .toggle { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.8rem; color:#9aa0ab; }
+  .toggle input { width:auto; accent-color:#3d7eff; }
   .err { color:#ff6b6b; font-size:.85rem; margin-top:10px; white-space:pre-wrap; }
   .ok { color:#51cf66; }
   #confirm, #done { display:none; }
@@ -70,6 +72,8 @@
     </div>
     <div class="hint">All optional, any combination. Sticker → identity, receipt → purchase info,
       product → your photo of the item, warranty → box panel or webpage with terms.</div>
+    <label class="toggle"><input type="checkbox" id="libMode">
+      <span>Pick from library instead of camera</span></label>
     <button class="primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
     <div class="err" id="capErr"></div>
   </div>
@@ -111,10 +115,14 @@ const $ = id => document.getElementById(id);
 const SLOTS = ['sticker', 'receipt', 'product', 'warranty'];
 let files = {};
 
-// No `capture` attribute on the inputs: iOS presents its native sheet
-// (Photo Library / Take Photo / Choose File), so existing photos work.
+// Default: `capture="environment"` jumps straight into the camera — the
+// in-the-moment flow. The library toggle removes the attribute, giving the
+// native sheet (Photo Library / Take Photo / Choose File) instead. iOS offers
+// no single control that does both.
 function pick(slot) {
   const inp = $('f_' + slot);
+  if ($('libMode').checked) inp.removeAttribute('capture');
+  else inp.setAttribute('capture', 'environment');
   inp.onchange = () => {
     if (!inp.files.length) return;
     files[slot] = inp.files[0];
