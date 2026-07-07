@@ -44,8 +44,9 @@ Task IDs stable. Each: intent · files · acceptance · deps. Status `[ ]/[~]/[x
   - Deps: P2-02.
 
 - [ ] **P2-04 · Create + enrich orchestration**
-  - Intent: on confirm — `POST /v1/entities` (name [+ item entityTypeId, tagIds=unverified+provenance, optional parentId])
-    → `PATCH` identity + purchase block → attach receipt (`type=receipt`) if present.
+  - Intent: on confirm — `POST /v1/entities` (name [+ tagIds=unverified+provenance, optional parentId])
+    → **`PutEntity` (PUT)** identity + purchase block (PATCH silently ignores scalar metadata — see spec §6)
+    → attach receipt (`type=receipt`) if present.
   - Files: `internal/portal/`, reuse `internal/homebox`.
   - Acceptance: entity appears in Homebox with correct type, tags, metadata; receipt attached; parentId set when chosen.
   - Deps: P2-03, Phase-1 P1-02/P1-03.

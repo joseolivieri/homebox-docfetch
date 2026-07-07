@@ -77,7 +77,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Acceptance: `docker compose up` starts both; docfetch reaches searxng by service name; state persists across restart.
   - Deps: P1-07.
 
-- [~] **P1-09 · Ansible role + deploy** *(SearXNG + docfetch)*
+- [x] **P1-09 · Ansible role + deploy** *(SearXNG + docfetch)*
   - Intent: `ansible/roles/docfetch/` mirroring the `homebox` role — deploy dir, `.env` from vault, `docker_compose_v2`,
     handler restart. Add `HOMEBOX_TOKEN`, `OPENROUTER_API_KEY` to `ansible/secrets.yml`. Tailscale-only exposure.
   - Files: `ansible/roles/docfetch/{tasks,defaults,handlers,templates}/`, `ansible/secrets.yml`, playbook wiring.

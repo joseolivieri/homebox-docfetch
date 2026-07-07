@@ -154,7 +154,10 @@ Base path `/api/v1`. Bearer token auth.
 - `GET  /v1/entities/{id}` — detail `EntityOut`: adds `manufacturer, modelNumber, serialNumber,
   notes, fields[], attachments[], children[], purchaseDate/From/Price, warrantyExpires/Details,
   lifetimeWarranty, syncChildEntityLocations, ...`. → Read `attachments[]` before attaching (dedupe).
-- `PATCH /v1/entities/{id}` — partial update (preferred). `PUT` also exists (full replace).
+- `PATCH /v1/entities/{id}` — partial update. **Verified gotcha:** PATCH honors `tagIds`/`archived`
+  and preserves other fields, but **silently ignores scalar metadata** (manufacturer, modelNumber,
+  serialNumber, purchase*, warranty*). Use PATCH for tag changes only. Use **`PUT` for metadata writes**
+  (full replace — fetch + merge first to avoid blanking). Phase 1 only PATCHes tags; Phase 2 uses PUT.
   `EntityUpdate` fields: `manufacturer, modelNumber, serialNumber, assetId, notes, fields, tagIds,
   purchaseDate, purchaseFrom, purchasePrice, warrantyExpires, warrantyDetails, lifetimeWarranty,
   archived, insured, quantity, parentId, syncChildEntityLocations, ...` (required: `name`).

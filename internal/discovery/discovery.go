@@ -8,6 +8,7 @@ package discovery
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -121,6 +122,7 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("searxng %q -> %d results", q, len(results))
 		for _, r := range results {
 			if seen[r.URL] || r.URL == "" {
 				continue

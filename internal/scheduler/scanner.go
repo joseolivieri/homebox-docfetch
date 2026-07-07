@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -104,7 +105,7 @@ func (s *Scanner) Scan(ctx context.Context, followup bool) error {
 				return err
 			}
 			if err := s.process(ctx, &list.Items[i], followup); err != nil {
-				// Per-item errors are logged via the record; keep scanning.
+				log.Printf("error processing %q (%s): %v", list.Items[i].Name, list.Items[i].ID, err)
 				s.recordError(ctx, &list.Items[i], err)
 			}
 		}
@@ -133,11 +134,11 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	}
 
 	base := &store.Record{
-		EntityID:  sum.ID,
-		Name:      detail.Name,
-		MetaHash:  store.MetaHash(detail.Manufacturer, detail.ModelNumber, detail.Name),
-		UpdatedAt: updatedAt,
-		FirstSeen: firstSeen(rec, now),
+		EntityID:    sum.ID,
+		Name:        detail.Name,
+		MetaHash:    store.MetaHash(detail.Manufacturer, detail.ModelNumber, detail.Name),
+		UpdatedAt:   updatedAt,
+		FirstSeen:   firstSeen(rec, now),
 		LastChecked: now,
 	}
 	if rec != nil {
@@ -146,6 +147,7 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 
 	// Already has a manual -> consider it done.
 	if s.cfg.SkipIfManualExists && hasManual(detail) {
+		log.Printf("skip %q — manual already present", detail.Name)
 		base.Status = store.StatusAttached
 		return s.store.Upsert(ctx, base)
 	}
@@ -153,6 +155,7 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	item := discovery.Item{Manufacturer: detail.Manufacturer, ModelNumber: detail.ModelNumber, Name: detail.Name}
 	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" {
 		// Nothing to search on; record and move on (no notification noise).
+		log.Printf("skip %q — no manufacturer/model to search on", detail.Name)
 		base.Status = store.StatusNotFound
 		base.Attempts++
 		return s.store.Upsert(ctx, base)
@@ -166,10 +169,13 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 
 	switch {
 	case res.Best != nil && res.Confidence >= s.cfg.AutoAttachThreshold:
+		log.Printf("attach %q — conf=%.2f llm=%v url=%s", detail.Name, res.Confidence, res.UsedLLM, res.Best.URL)
 		return s.attach(ctx, detail, res.Best, rec, base)
 	case res.Best != nil:
+		log.Printf("review-gate %q — conf=%.2f (below %.2f) url=%s", detail.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
 		return s.reviewGate(ctx, detail, res, base)
 	default:
+		log.Printf("no manual found for %q (candidates=%d)", detail.Name, len(res.Candidates))
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}

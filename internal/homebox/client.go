@@ -123,9 +123,25 @@ func (c *Client) CreateEntity(ctx context.Context, in EntityCreate) (*EntityOut,
 	return &out, nil
 }
 
+// PatchEntity partially updates an entity. NOTE (verified live): this fork's
+// PATCH honors tagIds/archived and preserves other fields, but SILENTLY IGNORES
+// scalar metadata (manufacturer, modelNumber, serialNumber, purchase*, …).
+// Use it for tag changes only. For metadata writes use PutEntity.
 func (c *Client) PatchEntity(ctx context.Context, id string, in EntityUpdate) (*EntityOut, error) {
 	var out EntityOut
 	if err := c.json(ctx, http.MethodPatch, "/entities/"+id, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PutEntity fully updates an entity (PUT). Required for scalar metadata
+// (manufacturer/modelNumber/purchase/warranty) which PATCH ignores. Because it
+// is a full replace, callers must send the complete desired field set (fetch
+// via GetEntity first and merge) to avoid blanking existing data.
+func (c *Client) PutEntity(ctx context.Context, id string, in EntityUpdate) (*EntityOut, error) {
+	var out EntityOut
+	if err := c.json(ctx, http.MethodPut, "/entities/"+id, in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
