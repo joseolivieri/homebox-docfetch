@@ -8,6 +8,7 @@ import (
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/enrich"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notify"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/store"
 )
@@ -102,8 +103,8 @@ func (s *Scanner) enrichEntity(ctx context.Context, detail *homebox.EntityOut) (
 			wroteCategory = fr.Value
 		}
 	}
-	if note := enrich.Note(writes); note != "" {
-		merged := strings.TrimSpace(strings.TrimSpace(detail.Notes) + "\n" + note)
+	if line := enrich.Note(writes); line != "" {
+		merged := notes.Append(detail.Notes, notes.Line(line))
 		upd.Notes = &merged
 	}
 	// Keep existing tags; add unverified so a human reviews the machine fill.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 )
 
 // handleCreate commits a confirmed intake: creates the entity, PUTs metadata,
@@ -105,7 +106,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		upd.WarrantyDetails = &d
 	}
 
-	note := "docfetch: created via photo intake " + time.Now().Format("2006-01-02")
+	note := notes.Append("", notes.Line("created via photo intake"))
 	upd.Notes = &note
 	if _, err := s.hb.PutEntity(ctx, ent.ID, upd); err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("metadata put: %w", err))
@@ -183,10 +184,9 @@ func (s *Server) postIntake(ctx context.Context, id string, personal *llm.Intake
 		s.estimateWarranty(ctx, detail, subject)
 	}
 
-	// Standard pipeline: metadata enrichment + manual fetch + gates.
-	if err := s.sc.ProcessEntity(ctx, id); err != nil {
-		log.Printf("postIntake %s: pipeline: %v", id, err)
-	}
+	// Docs + metadata enrichment are intentionally NOT run here: the scheduler's
+	// change-poll picks the new item up within ~30s, and having a single writer
+	// prevents the portal/scheduler race that once attached two manuals.
 }
 
 // fetchOfficialPhoto gathers image candidates, has the vision model pick the
@@ -237,7 +237,7 @@ func (s *Server) fetchOfficialPhoto(ctx context.Context, detail *homebox.EntityO
 	if personal != nil {
 		ref = ", matched to your photo"
 	}
-	n := strings.TrimSpace(fresh.Notes + fmt.Sprintf("\ndocfetch: official photo attached (conf %.2f%s) from %s", conf, ref, chosen.Src))
+	n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("official photo (conf %.2f%s) — %s", conf, ref, chosen.Src)))
 	upd.Notes = &n
 	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
 		log.Printf("postIntake %s: photo note put: %v", detail.ID, err)
@@ -269,7 +269,7 @@ func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut
 		upd := fullUpdate(fresh)
 		t := true
 		upd.LifetimeWarranty = &t
-		d := strings.TrimSpace(fresh.WarrantyDetails + "\ndocfetch: lifetime warranty per " + est.Source)
+		d := strings.TrimSpace(fresh.WarrantyDetails + "\nlifetime warranty per " + est.Source)
 		if est.ClaimsURL != "" {
 			d += "; claims: " + est.ClaimsURL
 		}
@@ -303,11 +303,11 @@ func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut
 	if est.Confidence >= 0.85 && est.Source != "" {
 		e := expiry.Format("2006-01-02")
 		upd.WarrantyExpires = &e
-		d := strings.TrimSpace(fresh.WarrantyDetails + "\ndocfetch: " + strconv.Itoa(est.Months) + "mo standard warranty per " + est.Source + claims)
+		d := strings.TrimSpace(fresh.WarrantyDetails + "\n" + strconv.Itoa(est.Months) + "mo standard warranty per " + est.Source + claims)
 		upd.WarrantyDetails = &d
 	} else {
 		// Uncertain: estimate note only, no hard expiry (decisions.md D11).
-		d := strings.TrimSpace(fresh.WarrantyDetails + fmt.Sprintf("\ndocfetch: est. %dmo from %s (unverified)%s", est.Months, purchase.Format("2006-01-02"), claims))
+		d := strings.TrimSpace(fresh.WarrantyDetails + fmt.Sprintf("\nest. %dmo from %s (unverified)%s", est.Months, purchase.Format("2006-01-02"), claims))
 		upd.WarrantyDetails = &d
 	}
 	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {

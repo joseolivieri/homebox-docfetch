@@ -25,6 +25,9 @@ func (e *Engine) SearchImages(ctx context.Context, query string) ([]ImageResult,
 	q.Set("q", query)
 	q.Set("format", "json")
 	q.Set("categories", "images")
+	if e.opt.Language != "" {
+		q.Set("language", e.opt.Language)
+	}
 	endpoint := strings.TrimRight(e.opt.SearxngURL, "/") + "/search?" + q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

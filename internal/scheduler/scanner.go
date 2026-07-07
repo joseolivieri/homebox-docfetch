@@ -16,6 +16,7 @@ import (
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notify"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/store"
 )
@@ -253,8 +254,18 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, best *d
 		return s.store.Upsert(ctx, base)
 	}
 
-	if _, err := s.api.UploadAttachment(ctx, detail.ID, filename(detail), s.cfg.DocType, false, bytes.NewReader(data)); err != nil {
+	updated, err := s.api.UploadAttachment(ctx, detail.ID, filename(detail), s.cfg.DocType, false, bytes.NewReader(data))
+	if err != nil {
 		return err
+	}
+	// Log the attach in the entity's docfetch notes block.
+	if updated != nil && updated.ID != "" {
+		upd := fullUpdateFrom(updated)
+		n := notes.Append(updated.Notes, notes.Line(fmt.Sprintf("manual attached — %s", best.URL)))
+		upd.Notes = &n
+		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
+			log.Printf("attach note put %s: %v", detail.ID, err)
+		}
 	}
 	t := time.Now()
 	base.Status = store.StatusAttached

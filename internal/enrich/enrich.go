@@ -312,5 +312,5 @@ func Note(frs []FieldResult) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	return "docfetch: auto-filled " + strings.Join(fields, ", ") + " — evidence: " + ev
+	return "auto-filled " + strings.Join(fields, ", ") + " — " + ev
 }

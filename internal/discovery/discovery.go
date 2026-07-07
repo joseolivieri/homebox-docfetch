@@ -72,6 +72,7 @@ type Reranker interface {
 
 type Options struct {
 	SearxngURL      string
+	Language        string // SearXNG language code; biases all searches
 	Queries         []string
 	MaxCandidates   int
 	MinPDFBytes     int64

@@ -44,6 +44,7 @@ func build(cfg *config.Config) (*deps, error) {
 	}
 	eng := discovery.NewEngine(discovery.Options{
 		SearxngURL:      cfg.Discovery.SearxngURL,
+		Language:        cfg.Discovery.Language,
 		Queries:         cfg.Discovery.Queries,
 		MaxCandidates:   cfg.Discovery.MaxCandidates,
 		MinPDFBytes:     cfg.Discovery.MinPDFBytes,

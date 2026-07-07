@@ -14,6 +14,7 @@ schedule:
 
 discovery:
   searxng_url: http://searxng:8080
+  language: en                     # bias manuals/warranty/photo sources to this language
   # {subject} = manufacturer+model when a model is known, else manufacturer+name.
   queries:
     - "{subject} user manual filetype:pdf"

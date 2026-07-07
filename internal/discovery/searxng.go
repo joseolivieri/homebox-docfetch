@@ -28,6 +28,9 @@ func (e *Engine) searxng(ctx context.Context, query string) ([]searxResult, erro
 	q := url.Values{}
 	q.Set("q", query)
 	q.Set("format", "json")
+	if e.opt.Language != "" {
+		q.Set("language", e.opt.Language)
+	}
 	endpoint := strings.TrimRight(e.opt.SearxngURL, "/") + "/search?" + q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

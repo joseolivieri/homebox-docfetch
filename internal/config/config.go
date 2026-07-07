@@ -59,6 +59,7 @@ type Schedule struct {
 
 type Discovery struct {
 	SearxngURL      string        `yaml:"searxng_url"`
+	Language        string        `yaml:"language"` // SearXNG language code (e.g. "en", "en-US"); biases manual/warranty/photo sources
 	Queries         []string      `yaml:"queries"`
 	MaxCandidates   int           `yaml:"max_candidates"`
 	MinPDFBytes     int64         `yaml:"min_pdf_bytes"`
@@ -152,6 +153,9 @@ func (c *Config) defaults() {
 	}
 	if c.Attach.DocType == "" {
 		c.Attach.DocType = "manual"
+	}
+	if c.Discovery.Language == "" {
+		c.Discovery.Language = "en"
 	}
 	if c.StateDB == "" {
 		c.StateDB = "/data/docfetch.db"

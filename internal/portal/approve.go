@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/scheduler"
 )
 
@@ -57,6 +58,14 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("approve: manual attached to %q (%s) via ntfy button", detail.Name, id)
+	if fresh, err := s.hb.GetEntity(ctx, id); err == nil {
+		upd := fullUpdate(fresh)
+		n := notes.Append(fresh.Notes, notes.Line("manual attached via approve — "+docURL))
+		upd.Notes = &n
+		if _, err := s.hb.PutEntity(ctx, id, upd); err != nil {
+			log.Printf("approve note put %s: %v", id, err)
+		}
+	}
 	respondApprove(w, r, detail.Name, "manual attached")
 }
 
