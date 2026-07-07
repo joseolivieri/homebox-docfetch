@@ -118,9 +118,10 @@ func runScheduler(ctx context.Context, cfgPath string) error {
 	}
 	defer d.st.Close()
 	return scheduler.Run(ctx, d.sc, scheduler.Specs{
-		ScanNew:   cfg.Schedule.ScanNew,
-		Followup:  cfg.Schedule.Followup,
-		Reconcile: cfg.Reconcile.DigestSchedule,
+		ScanNew:    cfg.Schedule.ScanNew,
+		Followup:   cfg.Schedule.Followup,
+		Reconcile:  cfg.Reconcile.DigestSchedule,
+		ChangePoll: cfg.Schedule.ChangePoll,
 	})
 }
 

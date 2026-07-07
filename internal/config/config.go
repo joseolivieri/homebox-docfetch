@@ -54,6 +54,7 @@ type Schedule struct {
 	ScanNew       string        `yaml:"scan_new"`
 	Followup      string        `yaml:"followup"`
 	FollowupAfter time.Duration `yaml:"followup_after"`
+	ChangePoll    time.Duration `yaml:"change_poll"` // 0 disables; probe-for-changes interval
 }
 
 type Discovery struct {

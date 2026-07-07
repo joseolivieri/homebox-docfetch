@@ -120,6 +120,22 @@ func (s *Scanner) Scan(ctx context.Context, followup bool) error {
 	}
 }
 
+// changeSignal returns a cheap fingerprint of the collection: item total plus
+// the newest updatedAt on the first page. Any add/delete/edit shifts it.
+func (s *Scanner) changeSignal(ctx context.Context) (string, error) {
+	list, err := s.api.ListEntities(ctx, 1, 50, nil)
+	if err != nil {
+		return "", err
+	}
+	newest := time.Time{}
+	for _, it := range list.Items {
+		if it.UpdatedAt.After(newest) {
+			newest = it.UpdatedAt
+		}
+	}
+	return fmt.Sprintf("%d|%s", list.Total, newest.UTC().Format(time.RFC3339Nano)), nil
+}
+
 // ProcessEntity runs the full per-item pipeline (enrich -> doc fetch/gate) for
 // one entity id, immediately. Used by the portal after intake so a freshly
 // created item is enriched and documented without waiting for the next tick.

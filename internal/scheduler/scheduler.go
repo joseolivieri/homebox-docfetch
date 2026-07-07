@@ -4,15 +4,21 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 )
 
-// Specs are the three cron expressions (5-field) that drive the daemon.
+// Specs are the cron expressions (5-field) plus the change-poll interval that
+// drive the daemon.
 type Specs struct {
 	ScanNew   string
 	Followup  string
 	Reconcile string
+	// ChangePoll, when > 0, probes Homebox for collection changes at this
+	// interval (one pageSize=1 list call) and triggers a scan on change —
+	// near-on-add behavior without a webhook. The cron scan stays as a floor.
+	ChangePoll time.Duration
 }
 
 // Run registers the cron jobs and blocks until ctx is cancelled. A single mutex
@@ -53,8 +59,39 @@ func Run(ctx context.Context, sc *Scanner, specs Specs) error {
 		}
 	}
 
+	// Change-poll loop: cheap probe, full scan only when the collection changed.
+	if specs.ChangePoll > 0 {
+		scan := guard("change-scan", func(ctx context.Context) error { return sc.Scan(ctx, false) })
+		go func() {
+			t := time.NewTicker(specs.ChangePoll)
+			defer t.Stop()
+			last := ""
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					sig, err := sc.changeSignal(ctx)
+					if err != nil {
+						log.Printf("[change-poll] probe error: %v", err)
+						continue
+					}
+					if last == "" { // first probe just primes the signal
+						last = sig
+						continue
+					}
+					if sig != last {
+						last = sig
+						log.Printf("[change-poll] collection changed; scanning")
+						scan()
+					}
+				}
+			}
+		}()
+	}
+
 	c.Start()
-	log.Printf("scheduler running (scan=%q followup=%q reconcile=%q)", specs.ScanNew, specs.Followup, specs.Reconcile)
+	log.Printf("scheduler running (scan=%q followup=%q reconcile=%q change_poll=%s)", specs.ScanNew, specs.Followup, specs.Reconcile, specs.ChangePoll)
 	<-ctx.Done()
 	stopCtx := c.Stop() // stops scheduling; wait for a running job to finish
 	<-stopCtx.Done()

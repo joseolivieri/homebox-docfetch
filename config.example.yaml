@@ -10,6 +10,7 @@ schedule:
   scan_new: "0 */6 * * *"          # discover + initial fetch on new items
   followup: "0 4 * * 0"            # weekly re-check known items for new/updated docs
   followup_after: 720h             # only re-check items whose last fetch is older than this
+  change_poll: 30s                 # probe for adds/edits this often; scan on change (0 = off)
 
 discovery:
   searxng_url: http://searxng:8080
