@@ -69,6 +69,7 @@ func (d *fakeDisc) Discover(_ context.Context, _ discovery.Item) (*discovery.Res
 	return d.res, nil
 }
 func (d *fakeDisc) Download(_ context.Context, _ string, _ int64) ([]byte, error) { return d.body, nil }
+func (d *fakeDisc) VerifyPDF(_ context.Context, _ discovery.Item, _ []byte) bool  { return true }
 
 type fakeNtfy struct{ sent int }
 

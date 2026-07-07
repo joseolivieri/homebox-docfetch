@@ -35,6 +35,7 @@ type EntityAPI interface {
 type Discoverer interface {
 	Discover(ctx context.Context, it discovery.Item) (*discovery.Result, error)
 	Download(ctx context.Context, url string, maxBytes int64) ([]byte, error)
+	VerifyPDF(ctx context.Context, it discovery.Item, data []byte) bool
 }
 
 // Notifier sends ntfy messages.
@@ -241,13 +242,24 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 // chosen candidate's download fails (bot-blocked vendor CDNs, dead links), it
 // falls back to the next-best scored PDF candidates instead of failing the item.
 func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, rec, base *store.Record) error {
+	item := discovery.Item{Manufacturer: detail.Manufacturer, ModelNumber: detail.ModelNumber, Name: detail.Name}
 	best := res.Best
 	data, err := s.disc.Download(ctx, best.URL, s.cfg.MaxPDFBytes)
 	if err != nil {
 		log.Printf("download failed for %q (%v); trying fallback candidates", detail.Name, err)
-		best, data = s.downloadFallback(ctx, res)
+		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
-			return err // keep the original cause; item retries later
+			// Nothing fetchable server-side (bot-walled hosts). Hand the best
+			// link to the human — a phone browser passes the challenge.
+			log.Printf("all downloads failed for %q; review-gating with link", detail.Name)
+			return s.reviewGate(ctx, detail, res, base)
+		}
+	} else if !s.disc.VerifyPDF(ctx, item, data) {
+		// Content says different product — try the other candidates, else gate.
+		log.Printf("content verify failed for %q (%s); trying fallback candidates", detail.Name, best.URL)
+		best, data = s.downloadFallback(ctx, res, item)
+		if best == nil {
+			return s.reviewGate(ctx, detail, res, base)
 		}
 	}
 	sha := store.DocSHA(data)
@@ -379,8 +391,9 @@ func (s *Scanner) recordError(ctx context.Context, sum *homebox.EntitySummary, c
 	_ = s.store.Upsert(ctx, base)
 }
 
-// downloadFallback tries the remaining PDF candidates in score order.
-func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result) (*discovery.Candidate, []byte) {
+// downloadFallback tries the remaining PDF candidates in score order; each one
+// must also pass content verification.
+func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, item discovery.Item) (*discovery.Candidate, []byte) {
 	tried := 0
 	for i := range res.Candidates {
 		c := &res.Candidates[i]
@@ -394,6 +407,9 @@ func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result) (
 		data, err := s.disc.Download(ctx, c.URL, s.cfg.MaxPDFBytes)
 		if err != nil {
 			log.Printf("fallback download failed (%s): %v", c.URL, err)
+			continue
+		}
+		if !s.disc.VerifyPDF(ctx, item, data) {
 			continue
 		}
 		log.Printf("fallback candidate succeeded: %s", c.URL)

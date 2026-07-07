@@ -87,6 +87,7 @@ type Engine struct {
 	http     *http.Client
 	limiter  *limiter
 	reranker Reranker // may be nil (rules-only)
+	verifier Verifier // may be nil (no content verification)
 }
 
 func NewEngine(opt Options, reranker Reranker) *Engine {
@@ -160,6 +161,18 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 				continue
 			}
 			seen[r.URL] = true
+			if isListingHostedDoc(r.URL) {
+				// Marketplace-CDN PDFs (Amazon quick-view etc.) are seller uploads
+				// that regularly contain a different product's manual — never
+				// authoritative (observed live: Soundcore manual on an Anker listing).
+				continue
+			}
+			if isBotBlockedDocHost(r.URL) {
+				// Hosts behind TLS-fingerprint bot walls (403 even with browser
+				// headers, verified live) — undownloadable server-side; let a
+				// fetchable source win instead.
+				continue
+			}
 			cands = append(cands, Candidate{
 				Title:   r.Title,
 				URL:     r.URL,
@@ -278,6 +291,29 @@ func (e *Engine) head(ctx context.Context, url string) (contentType string, size
 	}
 	defer resp.Body.Close()
 	return resp.Header.Get("Content-Type"), resp.ContentLength
+}
+
+// isBotBlockedDocHost flags doc hosts that 403 all non-browser clients
+// (Cloudflare TLS fingerprinting; verified live with full browser headers).
+func isBotBlockedDocHost(u string) bool {
+	l := strings.ToLower(u)
+	for _, bad := range []string{"fccid.io", "manuals.plus", "manualzz.com"} {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// isListingHostedDoc flags docs hosted on marketplace/listing CDNs.
+func isListingHostedDoc(u string) bool {
+	l := strings.ToLower(u)
+	for _, bad := range []string{"media-amazon.com", "images-amazon.com", "ssl-images-amazon", "ebayimg", "aliexpress"} {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return false
 }
 
 func isVendorish(u string) bool {

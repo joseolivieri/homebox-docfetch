@@ -75,6 +75,9 @@ func build(cfg *config.Config) (*deps, error) {
 	if xr, ok := rr.(*llm.Client); ok {
 		ai = xr
 	}
+	if ai != nil {
+		eng.SetVerifier(ai) // content-level doc verification before attach
+	}
 	if cfg.Enrich.Enabled {
 		if ai != nil {
 			sc.SetEnricher(enrich.New(enrich.Options{

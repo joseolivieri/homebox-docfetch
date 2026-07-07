@@ -69,7 +69,9 @@ func (c *Client) Rerank(ctx context.Context, itemDesc string, cands []Candidate)
 		fmt.Fprintf(&b, "[%d] %s | %s | %s\n", i, cd.Title, cd.URL, cd.Snippet)
 	}
 	sys := "You select the single best OFFICIAL user manual or support document for a product " +
-		"from search candidates. Prefer manufacturer/official domains and PDFs matching the model. " +
+		"from search candidates. Prefer manufacturer/official domains and PDFs matching the exact model. " +
+		"A document for a DIFFERENT model, or for a sibling/sub-brand of the same company, is WRONG — " +
+		"when no candidate clearly matches the exact product, return best=-1 rather than guessing. " +
 		`Respond with ONLY JSON: {"best":<index or -1 if none>,"confidence":<0.0-1.0>}. No prose.`
 
 	reqBody, _ := json.Marshal(chatReq{
