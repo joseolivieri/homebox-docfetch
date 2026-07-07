@@ -44,6 +44,14 @@ Format: decisions are immutable once logged (append a new entry to reverse one).
 
 ## Deferred / future (not in scope now)
 
+- **Doc classes (manual + quickstart + datasheet).** Today the pipeline attaches exactly ONE doc
+  per item (single Best candidate; `skip_if_manual_exists` is global, so a quick-start guide never
+  attaches once a manual exists). Deferred design (agreed 2026-07-06): classify candidates into
+  configurable classes (`manual`/`quickstart`/`datasheet`, per-class `max`+`enabled`), rerank call
+  becomes classify+rank in one call (`{"picks":[{class,best,conf}]}`, ~30 extra out-tokens), attach
+  loop best-of-class (all Homebox `type=manual`, distinguished by attachment title suffix), per-class
+  skip + content-hash dedupe via a small `docs` state table (same pattern as `enrichments`),
+  confidence gate per class. Default: manual+quickstart on, datasheet off, max 1 each. ~1-2h work.
 - Multi-item receipts (one receipt → parse line items → create N entities).
 - Multi-user / multi-household (each = a Homebox group = a separate scoped token).
 - Evaluating `/attachments/external` if Homebox later gains true URL-fetch semantics.
