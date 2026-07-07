@@ -17,6 +17,30 @@ services:
     networks:
       - docfetch
 
+  # Phase-2 photo-intake portal. Same image, portal subcommand. Tailscale-only:
+  # bound to the node's Tailscale IP; ingress-1 Caddy proxies
+  # docfetch.ingress-1.jentaculum.net to it.
+  portal:
+    image: docfetch:local
+    container_name: docfetch-portal
+    restart: unless-stopped
+    command: ["portal", "--config", "/config/config.yaml"]
+    depends_on:
+      - docfetch
+      - searxng
+    environment:
+      HOMEBOX_TOKEN: ${HOMEBOX_TOKEN}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${TAILSCALE_IP:-127.0.0.1}:8099:8099"
+    volumes:
+      - ${DATA_ROOT:-./data}/docfetch-portal:/data
+      - ./config.yaml:/config/config.yaml:ro
+    networks:
+      - docfetch
+
   # Self-hosted search backend. JSON format must be enabled in settings.yml
   # (search.formats includes json) for the docfetch client to work.
   searxng:

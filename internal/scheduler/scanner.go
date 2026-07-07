@@ -120,6 +120,26 @@ func (s *Scanner) Scan(ctx context.Context, followup bool) error {
 	}
 }
 
+// ProcessEntity runs the full per-item pipeline (enrich -> doc fetch/gate) for
+// one entity id, immediately. Used by the portal after intake so a freshly
+// created item is enriched and documented without waiting for the next tick.
+func (s *Scanner) ProcessEntity(ctx context.Context, id string) error {
+	if err := s.bootstrap(ctx); err != nil {
+		return err
+	}
+	detail, err := s.api.GetEntity(ctx, id)
+	if err != nil {
+		return err
+	}
+	sum := &homebox.EntitySummary{ID: detail.ID, Name: detail.Name, UpdatedAt: detail.UpdatedAt}
+	if err := s.process(ctx, sum, false); err != nil {
+		log.Printf("error processing %q (%s): %v", sum.Name, sum.ID, err)
+		s.recordError(ctx, sum, err)
+		return err
+	}
+	return nil
+}
+
 func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, followup bool) error {
 	now := time.Now()
 	rec, err := s.store.Get(ctx, sum.ID)

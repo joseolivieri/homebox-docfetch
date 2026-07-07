@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Homebox Intake</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #111318; color: #e6e6e9; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.15rem; margin: 8px 0 16px; }
+  .card { background: #1b1e26; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: .8rem; color: #9aa0ab; margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2c3140; background: #12141a; color: #e6e6e9; font-size: 1rem; }
+  .cap { display: flex; gap: 10px; }
+  .cap > div { flex: 1; }
+  .capbtn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+    width:100%; aspect-ratio: 1; border-radius: 12px; border: 2px dashed #2c3140; background:#12141a;
+    color:#9aa0ab; font-size:.85rem; cursor:pointer; overflow:hidden; position:relative; }
+  .capbtn img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .capbtn.filled { border-style: solid; border-color:#3d7eff; }
+  button.primary { width:100%; padding:14px; margin-top:14px; border:0; border-radius:10px;
+    background:#3d7eff; color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
+  button.primary:disabled { opacity:.45; }
+  .hint { font-size:.75rem; color:#6d7380; margin-top:8px; }
+  .err { color:#ff6b6b; font-size:.85rem; margin-top:10px; white-space:pre-wrap; }
+  .ok { color:#51cf66; }
+  #confirm, #done { display:none; }
+  .spinner { display:inline-block; width:16px; height:16px; border:2px solid #fff3; border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-3px; margin-right:8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  a { color:#3d7eff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📦 Homebox Intake</h1>
+
+  <div id="capture" class="card">
+    <div class="cap">
+      <div>
+        <div class="capbtn" id="btn1" onclick="pick(1)"><span>🏷️</span><span>Model sticker</span></div>
+        <input type="file" id="photo1" accept="image/*" capture="environment" hidden>
+      </div>
+      <div>
+        <div class="capbtn" id="btn2" onclick="pick(2)"><span>🧾</span><span>Receipt</span></div>
+        <input type="file" id="photo2" accept="image/*" capture="environment" hidden>
+      </div>
+    </div>
+    <div class="hint">Either photo works; both is best. Sticker gives identity, receipt gives purchase info.</div>
+    <button class="primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
+    <div class="err" id="capErr"></div>
+  </div>
+
+  <div id="confirm" class="card">
+    <label>Name *</label><input id="f_name">
+    <label>Manufacturer</label><input id="f_manufacturer">
+    <label>Model number</label><input id="f_modelNumber">
+    <label>Serial number</label><input id="f_serialNumber">
+    <label>Purchased from</label><input id="f_purchaseFrom">
+    <label>Purchase date</label><input id="f_purchaseDate" type="date">
+    <label>Price</label><input id="f_purchasePrice" type="number" step="0.01" inputmode="decimal">
+    <label>Location (optional)</label>
+    <select id="f_location"><option value="">— unset —</option></select>
+    <button class="primary" id="createBtn" onclick="createItem()">Add to Homebox</button>
+    <div class="err" id="confErr"></div>
+  </div>
+
+  <div id="done" class="card">
+    <p class="ok">✓ Item created.</p>
+    <p>Manual, product photo and metadata enrichment are running in the background.</p>
+    <p><a id="itemLink" href="#" target="_blank">Open in Homebox</a></p>
+    <button class="primary" onclick="location.reload()">Add another</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let files = {1: null, 2: null};
+
+function pick(n) {
+  const inp = $('photo' + n);
+  inp.onchange = () => {
+    if (!inp.files.length) return;
+    files[n] = inp.files[0];
+    const btn = $('btn' + n);
+    btn.classList.add('filled');
+    btn.innerHTML = '<img src="' + URL.createObjectURL(files[n]) + '">';
+    $('extractBtn').disabled = !(files[1] || files[2]);
+  };
+  inp.click();
+}
+
+async function loadLocations() {
+  try {
+    const r = await fetch('/api/locations');
+    const locs = await r.json();
+    for (const l of locs) {
+      const o = document.createElement('option');
+      o.value = l.id; o.textContent = l.name;
+      $('f_location').appendChild(o);
+    }
+  } catch (e) { /* dropdown stays with just unset */ }
+}
+loadLocations();
+
+async function extract() {
+  const btn = $('extractBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Reading…';
+  $('capErr').textContent = '';
+  const fd = new FormData();
+  if (files[1]) fd.append('photo1', files[1]);
+  if (files[2]) fd.append('photo2', files[2]);
+  try {
+    const r = await fetch('/api/extract', {method: 'POST', body: fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    $('f_name').value = j.name || j.receipt.nameHint || '';
+    $('f_manufacturer').value = j.sticker.manufacturer || '';
+    $('f_modelNumber').value = j.sticker.modelNumber || '';
+    $('f_serialNumber').value = j.sticker.serialNumber || '';
+    $('f_purchaseFrom').value = j.receipt.purchaseFrom || '';
+    $('f_purchaseDate').value = j.receipt.purchaseDate || '';
+    $('f_purchasePrice').value = j.receipt.purchasePrice || '';
+    $('confirm').style.display = 'block';
+    $('confirm').scrollIntoView({behavior: 'smooth'});
+  } catch (e) {
+    $('capErr').textContent = 'Extraction failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Read photos';
+  }
+}
+
+async function createItem() {
+  const btn = $('createBtn');
+  if (!$('f_name').value.trim()) { $('confErr').textContent = 'Name is required.'; return; }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Creating…';
+  $('confErr').textContent = '';
+  const fd = new FormData();
+  for (const k of ['name','manufacturer','modelNumber','serialNumber','purchaseFrom','purchaseDate','purchasePrice'])
+    fd.append(k, $('f_' + k).value.trim());
+  fd.append('locationId', $('f_location').value);
+  if (files[2]) fd.append('receipt', files[2]);   // receipt photo attaches to the item
+  try {
+    const r = await fetch('/api/create', {method: 'POST', body: fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    $('itemLink').href = j.url;
+    $('capture').style.display = 'none';
+    $('confirm').style.display = 'none';
+    $('done').style.display = 'block';
+  } catch (e) {
+    $('confErr').textContent = 'Create failed: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = 'Add to Homebox';
+  }
+}
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
@@ -10,15 +11,26 @@ import (
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notify"
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/portal"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/scheduler"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/store"
 )
 
+// deps bundles the assembled components so both the scheduler and the portal
+// can share one construction path.
+type deps struct {
+	hb  *homebox.Client
+	eng *discovery.Engine
+	ai  *llm.Client // nil when no key configured
+	st  *store.Store
+	sc  *scheduler.Scanner
+}
+
 // build assembles the scanner and its dependencies from config.
-func build(cfg *config.Config) (*scheduler.Scanner, *store.Store, error) {
+func build(cfg *config.Config) (*deps, error) {
 	st, err := store.Open(cfg.StateDB)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	hb := homebox.New(cfg.Homebox.URL, cfg.Homebox.Token)
@@ -55,8 +67,12 @@ func build(cfg *config.Config) (*scheduler.Scanner, *store.Store, error) {
 	})
 
 	// Metadata enrichment (Phase 1.5) needs both search and an LLM extractor.
+	var ai *llm.Client
+	if xr, ok := rr.(*llm.Client); ok {
+		ai = xr
+	}
 	if cfg.Enrich.Enabled {
-		if xr, ok := rr.(*llm.Client); ok {
+		if ai != nil {
 			sc.SetEnricher(enrich.New(enrich.Options{
 				Enabled:            true,
 				FillOnly:           cfg.Enrich.FillOnly,
@@ -65,12 +81,12 @@ func build(cfg *config.Config) (*scheduler.Scanner, *store.Store, error) {
 				BackCheck:          cfg.Enrich.BackCheck,
 				Fields:             cfg.Enrich.Fields,
 				MaxSnippetChars:    cfg.LLM.MaxSnippetChars,
-			}, eng, xr))
+			}, eng, ai))
 		} else {
 			log.Println("enrich.enabled=true but no LLM key configured; enrichment disabled")
 		}
 	}
-	return sc, st, nil
+	return &deps{hb: hb, eng: eng, ai: ai, st: st, sc: sc}, nil
 }
 
 func runOnce(ctx context.Context, cfgPath string) error {
@@ -78,13 +94,13 @@ func runOnce(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	sc, st, err := build(cfg)
+	d, err := build(cfg)
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer d.st.Close()
 	log.Println("running single scan pass")
-	if err := sc.Scan(ctx, false); err != nil {
+	if err := d.sc.Scan(ctx, false); err != nil {
 		return err
 	}
 	log.Println("scan complete")
@@ -96,14 +112,30 @@ func runScheduler(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	sc, st, err := build(cfg)
+	d, err := build(cfg)
 	if err != nil {
 		return err
 	}
-	defer st.Close()
-	return scheduler.Run(ctx, sc, scheduler.Specs{
+	defer d.st.Close()
+	return scheduler.Run(ctx, d.sc, scheduler.Specs{
 		ScanNew:   cfg.Schedule.ScanNew,
 		Followup:  cfg.Schedule.Followup,
 		Reconcile: cfg.Reconcile.DigestSchedule,
 	})
+}
+
+func runPortal(ctx context.Context, cfgPath string) error {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	d, err := build(cfg)
+	if err != nil {
+		return err
+	}
+	defer d.st.Close()
+	if d.ai == nil {
+		return fmt.Errorf("portal requires an LLM key (vision extraction)")
+	}
+	return portal.New(cfg, d.hb, d.eng, d.ai, d.sc).Run(ctx)
 }

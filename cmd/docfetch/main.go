@@ -47,8 +47,7 @@ func main() {
 	case "scheduler":
 		mustRun(runScheduler(ctx, *cfgPath))
 	case "portal":
-		fmt.Fprintln(os.Stderr, "portal: not yet implemented (Phase 2)")
-		os.Exit(1)
+		mustRun(runPortal(ctx, *cfgPath))
 	case "-h", "--help", "help":
 		usage()
 	default:
