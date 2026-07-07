@@ -15,6 +15,11 @@ schedule:
 discovery:
   searxng_url: http://searxng:8080
   language: en                     # bias manuals/warranty/photo sources to this language
+  # Source priority for manuals. Stops at the first stage with a confident pick.
+  #   brand-site: official-domain search + support-page PDF harvesting (best source)
+  #   web-pdf:    general search with filetype:pdf
+  #   web-html:   general search without filetype (HTML manual pages; linkable fallback)
+  pipeline: [brand-site, web-pdf, web-html]
   # {subject} = manufacturer+model when a model is known, else manufacturer+name.
   queries:
     - "{subject} user manual filetype:pdf"

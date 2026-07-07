@@ -60,6 +60,7 @@ type Schedule struct {
 type Discovery struct {
 	SearxngURL      string        `yaml:"searxng_url"`
 	Language        string        `yaml:"language"` // SearXNG language code (e.g. "en", "en-US"); biases manual/warranty/photo sources
+	Pipeline        []string      `yaml:"pipeline"` // source priority: brand-site, web-pdf, web-html
 	Queries         []string      `yaml:"queries"`
 	MaxCandidates   int           `yaml:"max_candidates"`
 	MinPDFBytes     int64         `yaml:"min_pdf_bytes"`

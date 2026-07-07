@@ -225,9 +225,20 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	}
 
 	switch {
-	case res.Best != nil && res.Confidence >= s.cfg.AutoAttachThreshold:
+	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
 		log.Printf("attach %q — conf=%.2f llm=%v url=%s", detail.Name, res.Confidence, res.UsedLLM, res.Best.URL)
 		return s.attach(ctx, detail, res, rec, base)
+	case res.BestHTML != nil:
+		// Prefer a PDF harvested from the official support page (page-follow)
+		// over linking the page itself; attach() falls back to the HTML link
+		// automatically when the PDFs fail to download or verify.
+		if op := bestOfficialPDF(res.Candidates); op != nil {
+			log.Printf("attach %q — official page-follow pdf %s", detail.Name, op.URL)
+			res.Best = op
+			return s.attach(ctx, detail, res, rec, base)
+		}
+		log.Printf("html-manual link %q — %s (official=%v)", detail.Name, res.BestHTML.URL, res.BestHTML.Official)
+		return s.attachHTMLLink(ctx, detail, res.BestHTML, base)
 	case res.Best != nil:
 		log.Printf("review-gate %q — conf=%.2f (below %.2f) url=%s", detail.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
 		return s.reviewGate(ctx, detail, res, base)
@@ -236,6 +247,31 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}
+}
+
+// attachHTMLLink records an online (HTML) manual: a tiny redirect file becomes
+// the manual attachment (Homebox cannot attach bare URLs) and the URL lands in
+// the notes block.
+func (s *Scanner) attachHTMLLink(ctx context.Context, detail *homebox.EntityOut, page *discovery.Candidate, base *store.Record) error {
+	html := "<!doctype html><meta http-equiv=\"refresh\" content=\"0;url=" + page.URL + "\">" +
+		"<body>Manual (online): <a href=\"" + page.URL + "\">" + page.URL + "</a></body>"
+	updated, err := s.api.UploadAttachment(ctx, detail.ID, "manual-link.html", s.cfg.DocType, false, strings.NewReader(html))
+	if err != nil {
+		return err
+	}
+	if updated != nil && updated.ID != "" {
+		upd := fullUpdateFrom(updated)
+		n := notes.Append(updated.Notes, notes.Line("manual (online) — "+page.URL))
+		upd.Notes = &n
+		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
+			log.Printf("html link note put %s: %v", detail.ID, err)
+		}
+	}
+	t := time.Now()
+	base.Status = store.StatusAttached
+	base.DocURL = page.URL
+	base.LastAttached = &t
+	return s.store.Upsert(ctx, base)
 }
 
 // attach downloads, dedupes by content hash, uploads as a manual. When the
@@ -249,16 +285,23 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *di
 		log.Printf("download failed for %q (%v); trying fallback candidates", detail.Name, err)
 		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
-			// Nothing fetchable server-side (bot-walled hosts). Hand the best
-			// link to the human — a phone browser passes the challenge.
+			// Nothing fetchable server-side (bot-walled hosts). Prefer linking
+			// an official HTML manual page; else hand the link to the human.
+			if res.BestHTML != nil {
+				return s.attachHTMLLink(ctx, detail, res.BestHTML, base)
+			}
 			log.Printf("all downloads failed for %q; review-gating with link", detail.Name)
 			return s.reviewGate(ctx, detail, res, base)
 		}
 	} else if !s.disc.VerifyPDF(ctx, item, data) {
-		// Content says different product — try the other candidates, else gate.
+		// Content says different product — try the other candidates, else the
+		// HTML manual page, else gate.
 		log.Printf("content verify failed for %q (%s); trying fallback candidates", detail.Name, best.URL)
 		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
+			if res.BestHTML != nil {
+				return s.attachHTMLLink(ctx, detail, res.BestHTML, base)
+			}
 			return s.reviewGate(ctx, detail, res, base)
 		}
 	}
@@ -416,6 +459,21 @@ func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, i
 		return c, data
 	}
 	return nil, nil
+}
+
+// bestOfficialPDF returns the highest-scored official-domain PDF candidate.
+func bestOfficialPDF(cands []discovery.Candidate) *discovery.Candidate {
+	var best *discovery.Candidate
+	for i := range cands {
+		c := &cands[i]
+		if !c.Official || c.IsHTML || !strings.HasSuffix(strings.ToLower(c.URL), ".pdf") && !c.IsPDF {
+			continue
+		}
+		if best == nil || c.Score > best.Score {
+			best = c
+		}
+	}
+	return best
 }
 
 func hasManual(detail *homebox.EntityOut) bool {

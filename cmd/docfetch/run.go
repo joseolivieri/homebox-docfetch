@@ -45,6 +45,8 @@ func build(cfg *config.Config) (*deps, error) {
 	eng := discovery.NewEngine(discovery.Options{
 		SearxngURL:      cfg.Discovery.SearxngURL,
 		Language:        cfg.Discovery.Language,
+		Pipeline:        cfg.Discovery.Pipeline,
+		StopConfidence:  cfg.Confidence.AutoAttachThreshold,
 		Queries:         cfg.Discovery.Queries,
 		MaxCandidates:   cfg.Discovery.MaxCandidates,
 		MinPDFBytes:     cfg.Discovery.MinPDFBytes,
@@ -76,7 +78,8 @@ func build(cfg *config.Config) (*deps, error) {
 		ai = xr
 	}
 	if ai != nil {
-		eng.SetVerifier(ai) // content-level doc verification before attach
+		eng.SetVerifier(ai)      // content-level doc verification before attach
+		eng.SetBrandResolver(ai) // official-domain resolution for the brand-site stage
 	}
 	if cfg.Enrich.Enabled {
 		if ai != nil {
