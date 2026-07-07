@@ -19,11 +19,11 @@ func (c *Client) VerifyDoc(ctx context.Context, itemDesc, excerpt string) (match
 		return false, 0, fmt.Errorf("empty excerpt")
 	}
 	sys := "You verify that a document belongs to a product. Given the product identity and the " +
-		"opening text of a downloaded document, decide if the document is a manual/guide/datasheet " +
-		"FOR THAT EXACT PRODUCT. A manual for a different model or a sibling brand of the same " +
-		"company (e.g. Soundcore vs Anker) is NOT a match. If the document text identifies a model " +
-		"number that differs from the product's model number, match=false even when the product " +
-		"family or brand matches. " +
+		"opening text of a downloaded document, decide if the document could be a manual/guide/" +
+		"datasheet for that product. match=false ONLY when the text positively identifies a " +
+		"DIFFERENT product, model number, or sibling brand (e.g. a Soundcore speaker manual for an " +
+		"Anker charger, or model X100 when the product is X200). Generic safety/usage text without " +
+		"clear product identifiers is match=true (the search layer already vetted the source). " +
 		`Respond ONLY with JSON: {"match":false,"confidence":0.0}. No prose.`
 	user := fmt.Sprintf("Product: %s\n\nDocument opening text:\n%s", itemDesc, excerpt)
 

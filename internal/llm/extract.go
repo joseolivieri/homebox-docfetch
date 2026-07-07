@@ -38,8 +38,9 @@ func (c *Client) ExtractIdentity(ctx context.Context, itemDesc string, cands []C
 		fmt.Fprintf(&b, "[%d] %s | %s | %s\n", i, cd.Title, cd.URL, cd.Snippet)
 	}
 	sys := "You identify consumer products. From the search results, infer the product's canonical " +
-		"identity. modelNumber must be the manufacturer's model/part number (e.g. CFI-Y1000, WH-1000XM5), " +
-		"never a marketing phrase; empty string if not evident. category is a short lowercase noun phrase. " +
+		"identity. modelNumber must be the manufacturer's part/SKU number (e.g. CFI-Y1000, WH-1000XM5, A1289), " +
+		"NEVER the marketing number in the product name (for 'Anker 737 Power Bank' the modelNumber is A1289, " +
+		"not 737); empty string if not evident. category is a short lowercase noun phrase. " +
 		`Respond ONLY with JSON: {"manufacturer":"","modelNumber":"","name":"","category":"",` +
 		`"confidence":{"manufacturer":0.0,"modelNumber":0.0,"name":0.0,"category":0.0}}. No prose.`
 

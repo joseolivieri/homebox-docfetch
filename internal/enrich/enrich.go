@@ -265,9 +265,16 @@ func domain(raw string) string {
 	return strings.Join(parts, ".")
 }
 
-var hasDigit = regexp.MustCompile(`\d`)
+var (
+	hasDigit  = regexp.MustCompile(`\d`)
+	hasLetter = regexp.MustCompile(`[a-zA-Z]`)
+)
 
-// modelSane rejects marketing phrases masquerading as model numbers.
+// modelSane rejects marketing phrases and marketing numbers masquerading as
+// model numbers. Real part numbers mix letters and digits (A1289, WH-1000XM5);
+// a short bare number ("737") is a product line, not a SKU — accepting one
+// poisons doc verification downstream (observed live: enrichment wrote
+// modelNumber=737 for the Anker 737 Power Bank, whose SKU is A1289).
 func modelSane(v string) bool {
 	if len(v) < 2 || len(v) > 40 {
 		return false
@@ -275,7 +282,13 @@ func modelSane(v string) bool {
 	if strings.Count(v, " ") > 2 {
 		return false
 	}
-	return hasDigit.MatchString(v) || strings.Contains(v, "-")
+	if !hasDigit.MatchString(v) && !strings.Contains(v, "-") {
+		return false
+	}
+	if !hasLetter.MatchString(v) && len(v) < 6 {
+		return false // short all-digit string = marketing number
+	}
+	return true
 }
 
 func remove(ss []string, v string) []string {

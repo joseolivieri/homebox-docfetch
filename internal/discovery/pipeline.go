@@ -110,7 +110,11 @@ func (e *Engine) brandSiteCandidates(ctx context.Context, it Item) []Candidate {
 	return dedupeByURL(cands, e.opt.MaxCandidates)
 }
 
-var hrefRe = regexp.MustCompile(`(?i)href\s*=\s*["']([^"']+\.pdf[^"']*)["']`)
+var (
+	hrefRe      = regexp.MustCompile(`(?i)href\s*=\s*["']([^"']+\.pdf[^"']*)["']`)
+	manualDocRe = regexp.MustCompile(`(?i)manual|guide|instruction|datasheet|user|_um|_ug|quickstart|qsg|knowledge-download`)
+	legalDocRe  = regexp.MustCompile(`(?i)statement|policy|terms|privacy|compliance|conduct|msa_|warranty-policy|declaration|conformity`)
+)
 
 // pdfLinksFrom fetches an HTML page and extracts absolute PDF links.
 func (e *Engine) pdfLinksFrom(ctx context.Context, pageURL string) []string {
@@ -133,8 +137,8 @@ func (e *Engine) pdfLinksFrom(ctx context.Context, pageURL string) []string {
 		return nil
 	}
 	seen := map[string]bool{}
-	var out []string
-	for _, m := range hrefRe.FindAllStringSubmatch(string(body), 12) {
+	var manualish, other []string
+	for _, m := range hrefRe.FindAllStringSubmatch(string(body), 24) {
 		u, err := url.Parse(strings.TrimSpace(m[1]))
 		if err != nil {
 			continue
@@ -144,10 +148,22 @@ func (e *Engine) pdfLinksFrom(ctx context.Context, pageURL string) []string {
 			continue
 		}
 		seen[abs] = true
-		out = append(out, abs)
-		if len(out) >= 5 {
-			break
+		l := strings.ToLower(abs)
+		if legalDocRe.MatchString(l) {
+			continue // footer/legal PDFs (MSA statements, policies) — never manuals
 		}
+		if manualDocRe.MatchString(l) {
+			manualish = append(manualish, abs)
+		} else {
+			other = append(other, abs)
+		}
+	}
+	out := manualish
+	if len(out) == 0 {
+		out = other // knowledge-CDN links are often opaque ids; keep them
+	}
+	if len(out) > 5 {
+		out = out[:5]
 	}
 	if len(out) > 0 {
 		log.Printf("page-follow %s -> %d pdf link(s)", pageURL, len(out))

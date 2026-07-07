@@ -302,7 +302,11 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *di
 			// remote sources instead — a phone browser passes the bot wall.
 			return s.linkManual(ctx, detail, res, base)
 		}
-	} else if !s.disc.VerifyPDF(ctx, item, data) {
+	} else if !best.Official && !s.disc.VerifyPDF(ctx, item, data) {
+		// Official brand-domain docs skip content verification: provenance from
+		// the manufacturer's own support page is stronger evidence than an LLM
+		// reading of a sparse excerpt (observed false-negatives on image-heavy
+		// official manuals). General-web sources still verify.
 		// Content says different product — try the other candidates, else the
 		// HTML manual page, else gate. The rejected PDF must not be linked
 		// either (its content is wrong, not just unreachable).
@@ -465,7 +469,7 @@ func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, i
 			log.Printf("fallback download failed (%s): %v", c.URL, err)
 			continue
 		}
-		if !s.disc.VerifyPDF(ctx, item, data) {
+		if !c.Official && !s.disc.VerifyPDF(ctx, item, data) {
 			continue
 		}
 		log.Printf("fallback candidate succeeded: %s", c.URL)

@@ -10,6 +10,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -203,7 +204,7 @@ func (e *Engine) pick(ctx context.Context, it Item, cands []Candidate, requireMo
 		e.limiter.wait(ctx)
 		desc := it.desc()
 		if e.opt.Language != "" {
-			desc += " (prefer documents in language: " + e.opt.Language + ")"
+			desc += " (prefer documents in language: " + e.opt.Language + "; prefer US/global-market sources over country-specific sites)"
 		}
 		idx, conf, err := e.reranker.Rerank(ctx, desc, lc)
 		if err == nil && idx >= 0 {
@@ -275,6 +276,11 @@ func (e *Engine) scoreCandidates(ctx context.Context, it Item, cands []Candidate
 		if c.Official {
 			c.Score += 2
 		}
+		if strings.HasPrefix(strings.ToLower(e.opt.Language), "en") && isCountrySpecificHost(c.URL) {
+			// Bias toward US/global sources — country-market sites can carry
+			// different warranty terms and non-English documents.
+			c.Score--
+		}
 	}
 }
 
@@ -306,6 +312,27 @@ func (e *Engine) head(ctx context.Context, url string) (contentType string, size
 	}
 	defer resp.Body.Close()
 	return resp.Header.Get("Content-Type"), resp.ContentLength
+}
+
+// isCountrySpecificHost flags hosts that target a non-US country market
+// (country-code TLDs or country-named domains like ankerjapan.com).
+func isCountrySpecificHost(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	h := strings.ToLower(u.Host)
+	for _, tld := range []string{".jp", ".cn", ".kr", ".tw", ".de", ".fr", ".it", ".es", ".ru", ".br", ".mx", ".nl", ".pl", ".se", ".tr", ".in"} {
+		if strings.HasSuffix(h, tld) {
+			return true
+		}
+	}
+	for _, w := range []string{"japan", "china", "korea", "europe", "deutschland"} {
+		if strings.Contains(h, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // isBotBlockedDocHost flags doc hosts that 403 all non-browser clients
