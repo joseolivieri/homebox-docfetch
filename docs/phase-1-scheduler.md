@@ -55,7 +55,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
     respects `rate_limit_per_min`; negative results cached with backoff.
   - Deps: P1-01, P1-04, Q2 (for the rerank step; rules path testable without).
 
-- [ ] **P1-06 · Attach + confidence gate** *(gate policy per Q3)*
+- [x] **P1-06 · Attach + confidence gate** *(gate policy per Q3)*
   - Intent: download best candidate → SHA-256 → dedupe vs entity attachments → if `>= auto_attach_threshold`
     (and model-match if required) upload `type=manual`; else review-gate (ntfy notify w/ candidate link, mark pending).
   - Files: `internal/discovery/` (attach), `internal/notify/`, wire in `scheduler`.
@@ -63,7 +63,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
     not attach; identical doc never re-attached; `skip_if_manual_exists` honored.
   - Deps: P1-02, P1-04, P1-05, Q3.
 
-- [ ] **P1-07 · Scheduler jobs (in-process cron)**
+- [x] **P1-07 · Scheduler jobs (in-process cron)**
   - Intent: cron per spec — `scan_new` (new items → discovery initial), `followup` (stale > `followup_after` →
     discovery followup), `reconcile` (`?tags=unverified` → weekly ntfy digest count). `once` subcommand runs one scan.
   - Files: `internal/scheduler/`, `cmd/docfetch/`.

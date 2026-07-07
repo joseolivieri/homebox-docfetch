@@ -42,9 +42,10 @@ func main() {
 		fmt.Println("docfetch", version)
 	case "probe":
 		mustRun(probe(ctx, *cfgPath))
-	case "once", "scheduler":
-		fmt.Fprintf(os.Stderr, "%s: not yet implemented (P1-07)\n", cmd)
-		os.Exit(1)
+	case "once":
+		mustRun(runOnce(ctx, *cfgPath))
+	case "scheduler":
+		mustRun(runScheduler(ctx, *cfgPath))
 	case "portal":
 		fmt.Fprintln(os.Stderr, "portal: not yet implemented (Phase 2)")
 		os.Exit(1)
