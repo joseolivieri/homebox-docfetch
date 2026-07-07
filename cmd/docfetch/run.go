@@ -39,7 +39,7 @@ func build(cfg *config.Config) (*scheduler.Scanner, *store.Store, error) {
 		RatePerMin:      cfg.Discovery.RateLimitPerMin,
 	}, rr)
 
-	nt := notify.New(cfg.Notify.NtfyURL, cfg.Notify.NtfyTopic)
+	nt := notify.New(cfg.Notify.NtfyURL, cfg.Notify.NtfyTopic, cfg.Notify.NtfyToken)
 
 	sc := scheduler.NewScanner(hb, eng, nt, st, scheduler.Config{
 		PageSize:            cfg.Homebox.PageSize,

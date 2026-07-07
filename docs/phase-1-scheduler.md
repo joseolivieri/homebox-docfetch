@@ -70,21 +70,21 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done.
   - Acceptance: cron entries registered from config; `docfetch once` runs a full scan and exits 0; overlapping runs guarded.
   - Deps: P1-03, P1-04, P1-06.
 
-- [ ] **P1-08 · Dockerize**
+- [x] **P1-08 · Dockerize**
   - Intent: multi-stage build → minimal final image; non-root; `/data` volume for `state_db`; `docker-compose.yml`
     with `docfetch` + `searxng` services on a shared network.
   - Files: `Dockerfile`, `docker-compose.yml`.
   - Acceptance: `docker compose up` starts both; docfetch reaches searxng by service name; state persists across restart.
   - Deps: P1-07.
 
-- [ ] **P1-09 · Ansible role + deploy** *(SearXNG + docfetch)*
+- [~] **P1-09 · Ansible role + deploy** *(SearXNG + docfetch)*
   - Intent: `ansible/roles/docfetch/` mirroring the `homebox` role — deploy dir, `.env` from vault, `docker_compose_v2`,
     handler restart. Add `HOMEBOX_TOKEN`, `OPENROUTER_API_KEY` to `ansible/secrets.yml`. Tailscale-only exposure.
   - Files: `ansible/roles/docfetch/{tasks,defaults,handlers,templates}/`, `ansible/secrets.yml`, playbook wiring.
   - Acceptance: `cd ansible && ansible-playbook ... --limit compute-1` deploys cleanly; service healthy; scan runs on schedule.
   - Deps: P1-08, Q1, Q2.
 
-- [ ] **P1-10 · Docs + memory**
+- [x] **P1-10 · Docs + memory**
   - Intent: update `docs/architecture.md` (service inventory, compute-1 table, access tier, Ansible roles table);
     add a `project_docfetch` memory; note SearXNG as a new service.
   - Files: `docs/architecture.md`, memory dir.

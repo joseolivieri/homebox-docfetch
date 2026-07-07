@@ -1,0 +1,36 @@
+services:
+  docfetch:
+    build: .
+    image: docfetch:local
+    container_name: docfetch
+    restart: unless-stopped
+    depends_on:
+      - searxng
+    environment:
+      HOMEBOX_TOKEN: ${HOMEBOX_TOKEN}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${DATA_ROOT:-./data}/docfetch:/data
+      - ./config.yaml:/config/config.yaml:ro
+    networks:
+      - docfetch
+
+  # Self-hosted search backend. JSON format must be enabled in settings.yml
+  # (search.formats includes json) for the docfetch client to work.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: docfetch-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    networks:
+      - docfetch
+
+networks:
+  docfetch:
+    driver: bridge

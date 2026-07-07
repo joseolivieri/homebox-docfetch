@@ -45,8 +45,9 @@ reconcile:
   digest_schedule: "0 9 * * 1"
 
 notify:
-  ntfy_url: http://ntfy:8080
+  ntfy_url: https://ntfy.jentaculum.net
   ntfy_topic: homelab
+  ntfy_token: ${NTFY_TOKEN}         # optional; required if the topic restricts publish
 
 portal:
   listen: ":8099"

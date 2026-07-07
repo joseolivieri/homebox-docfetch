@@ -1,0 +1,15 @@
+# SearXNG settings for the docfetch backend.
+# The Ansible role overwrites secret_key from vault on deploy; this value is a
+# dev-only placeholder for local `docker compose up`.
+use_default_settings: true
+
+server:
+  secret_key: "dev-only-change-me"
+  limiter: false
+  image_proxy: false
+
+search:
+  # JSON output is REQUIRED — the docfetch client requests format=json.
+  formats:
+    - html
+    - json

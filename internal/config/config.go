@@ -84,6 +84,7 @@ type Reconcile struct {
 type Notify struct {
 	NtfyURL   string `yaml:"ntfy_url"`
 	NtfyTopic string `yaml:"ntfy_topic"`
+	NtfyToken string `yaml:"ntfy_token"` // optional bearer for restricted publish
 }
 
 type Portal struct {

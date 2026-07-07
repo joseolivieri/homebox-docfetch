@@ -12,15 +12,17 @@ import (
 )
 
 type Ntfy struct {
-	url   string // base, e.g. http://ntfy:8080
+	url   string // base, e.g. https://ntfy.jentaculum.net
 	topic string
+	token string // optional bearer token for restricted publish
 	http  *http.Client
 }
 
-func New(baseURL, topic string) *Ntfy {
+func New(baseURL, topic, token string) *Ntfy {
 	return &Ntfy{
 		url:   strings.TrimRight(baseURL, "/"),
 		topic: topic,
+		token: token,
 		http:  &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -50,6 +52,9 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 	}
 	if len(m.Tags) > 0 {
 		req.Header.Set("Tags", strings.Join(m.Tags, ","))
+	}
+	if n.token != "" {
+		req.Header.Set("Authorization", "Bearer "+n.token)
 	}
 	resp, err := n.http.Do(req)
 	if err != nil {
