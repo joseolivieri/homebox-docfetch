@@ -237,8 +237,7 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 			res.Best = op
 			return s.attach(ctx, detail, res, rec, base)
 		}
-		log.Printf("html-manual link %q — %s (official=%v)", detail.Name, res.BestHTML.URL, res.BestHTML.Official)
-		return s.attachHTMLLink(ctx, detail, res.BestHTML, base)
+		return s.linkManual(ctx, detail, res, base)
 	case res.Best != nil:
 		log.Printf("review-gate %q — conf=%.2f (below %.2f) url=%s", detail.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
 		return s.reviewGate(ctx, detail, res, base)
@@ -249,27 +248,41 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	}
 }
 
-// attachHTMLLink records an online (HTML) manual: a tiny redirect file becomes
-// the manual attachment (Homebox cannot attach bare URLs) and the URL lands in
-// the notes block.
-func (s *Scanner) attachHTMLLink(ctx context.Context, detail *homebox.EntityOut, page *discovery.Candidate, base *store.Record) error {
-	html := "<!doctype html><meta http-equiv=\"refresh\" content=\"0;url=" + page.URL + "\">" +
-		"<body>Manual (online): <a href=\"" + page.URL + "\">" + page.URL + "</a></body>"
-	updated, err := s.api.UploadAttachment(ctx, detail.ID, "manual-link.html", s.cfg.DocType, false, strings.NewReader(html))
+// linkManual records online manual sources in custom fields — "Manual" for a
+// remote PDF, "Manual (web)" for an HTML support page. Homebox auto-links a
+// single URL per text field. No file is attached.
+func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, base *store.Record) error {
+	fresh, err := s.api.GetEntity(ctx, detail.ID)
 	if err != nil {
 		return err
 	}
-	if updated != nil && updated.ID != "" {
-		upd := fullUpdateFrom(updated)
-		n := notes.Append(updated.Notes, notes.Line("manual (online) — "+page.URL))
-		upd.Notes = &n
-		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
-			log.Printf("html link note put %s: %v", detail.ID, err)
+	upd := fullUpdateFrom(fresh)
+	var lines []string
+	docURL := ""
+	if res.Best != nil && res.Best.IsPDF {
+		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", res.Best.URL)
+		lines = append(lines, notes.Line("manual linked (remote pdf) — "+res.Best.URL))
+		docURL = res.Best.URL
+	}
+	if res.BestHTML != nil {
+		upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", res.BestHTML.URL)
+		lines = append(lines, notes.Line("manual linked (web) — "+res.BestHTML.URL))
+		if docURL == "" {
+			docURL = res.BestHTML.URL
 		}
 	}
+	if docURL == "" {
+		return s.reviewGate(ctx, detail, res, base)
+	}
+	n := notes.Append(fresh.Notes, lines...)
+	upd.Notes = &n
+	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
+		return err
+	}
+	log.Printf("manual linked for %q — %s", detail.Name, docURL)
 	t := time.Now()
 	base.Status = store.StatusAttached
-	base.DocURL = page.URL
+	base.DocURL = docURL
 	base.LastAttached = &t
 	return s.store.Upsert(ctx, base)
 }
@@ -285,24 +298,19 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *di
 		log.Printf("download failed for %q (%v); trying fallback candidates", detail.Name, err)
 		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
-			// Nothing fetchable server-side (bot-walled hosts). Prefer linking
-			// an official HTML manual page; else hand the link to the human.
-			if res.BestHTML != nil {
-				return s.attachHTMLLink(ctx, detail, res.BestHTML, base)
-			}
-			log.Printf("all downloads failed for %q; review-gating with link", detail.Name)
-			return s.reviewGate(ctx, detail, res, base)
+			// Nothing fetchable server-side (bot-walled hosts): link the best
+			// remote sources instead — a phone browser passes the bot wall.
+			return s.linkManual(ctx, detail, res, base)
 		}
 	} else if !s.disc.VerifyPDF(ctx, item, data) {
 		// Content says different product — try the other candidates, else the
-		// HTML manual page, else gate.
+		// HTML manual page, else gate. The rejected PDF must not be linked
+		// either (its content is wrong, not just unreachable).
 		log.Printf("content verify failed for %q (%s); trying fallback candidates", detail.Name, best.URL)
 		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
-			if res.BestHTML != nil {
-				return s.attachHTMLLink(ctx, detail, res.BestHTML, base)
-			}
-			return s.reviewGate(ctx, detail, res, base)
+			res.Best = nil
+			return s.linkManual(ctx, detail, res, base)
 		}
 	}
 	sha := store.DocSHA(data)
@@ -320,11 +328,16 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *di
 	if err != nil {
 		return err
 	}
-	// Log the attach in the entity's docfetch notes block.
+	// Log the attach + link the source in custom fields ("Manual" auto-links
+	// in the Homebox UI; one URL per field — two don't parse).
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
 		n := notes.Append(updated.Notes, notes.Line(fmt.Sprintf("manual attached — %s", best.URL)))
 		upd.Notes = &n
+		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", best.URL)
+		if res.BestHTML != nil && res.BestHTML.Official {
+			upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", res.BestHTML.URL)
+		}
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("attach note put %s: %v", detail.ID, err)
 		}
@@ -482,7 +495,9 @@ func hasManual(detail *homebox.EntityOut) bool {
 			return true
 		}
 	}
-	return false
+	// A linked online manual counts as documented (no local file needed).
+	return homebox.FieldValue(detail.Fields, "Manual") != "" ||
+		homebox.FieldValue(detail.Fields, "Manual (web)") != ""
 }
 
 func firstSeen(rec *store.Record, now time.Time) time.Time {

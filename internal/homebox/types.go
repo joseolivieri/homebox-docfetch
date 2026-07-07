@@ -61,6 +61,19 @@ type ParentRef struct {
 	Name string `json:"name"`
 }
 
+// EntityField is one custom field (repo.EntityFieldData). Homebox's UI
+// auto-links URLs in text fields (one URL per field parses; two don't).
+// CRITICAL: PUT without fields WIPES all custom fields (verified live) — every
+// full-merge update must round-trip them.
+type EntityField struct {
+	ID           string  `json:"id,omitempty"`
+	Name         string  `json:"name"`
+	Type         string  `json:"type"` // text | number | boolean | time
+	TextValue    string  `json:"textValue,omitempty"`
+	NumberValue  float64 `json:"numberValue,omitempty"`
+	BooleanValue bool    `json:"booleanValue,omitempty"`
+}
+
 // Attachment — sub-object of EntityOut.attachments[].
 type Attachment struct {
 	ID      string `json:"id"`
@@ -73,29 +86,30 @@ type Attachment struct {
 // PUT full-replace must round-trip (see scheduler.fullUpdateFrom) so machine
 // writes never blank existing data.
 type EntityOut struct {
-	ID               string       `json:"id"`
-	Name             string       `json:"name"`
-	Description      string       `json:"description"`
-	EntityType       EntityType   `json:"entityType"`
-	Tags             []Tag        `json:"tags"`
-	Attachments      []Attachment `json:"attachments"`
-	AssetID          string       `json:"assetId"`
-	Parent           *ParentRef   `json:"parent"`
-	Manufacturer     string       `json:"manufacturer"`
-	ModelNumber      string       `json:"modelNumber"`
-	SerialNumber     string       `json:"serialNumber"`
-	Notes            string       `json:"notes"`
-	ImageID          string       `json:"imageId"`
-	Quantity         float64      `json:"quantity"`
-	Insured          bool         `json:"insured"`
-	Archived         bool         `json:"archived"`
-	LifetimeWarranty bool         `json:"lifetimeWarranty"`
-	PurchaseFrom     string       `json:"purchaseFrom"`
-	PurchaseDate     string       `json:"purchaseDate"`
-	PurchasePrice    float64      `json:"purchasePrice"`
-	WarrantyExpires  string       `json:"warrantyExpires"`
-	WarrantyDetails  string       `json:"warrantyDetails"`
-	UpdatedAt        time.Time    `json:"updatedAt"`
+	ID               string        `json:"id"`
+	Name             string        `json:"name"`
+	Description      string        `json:"description"`
+	EntityType       EntityType    `json:"entityType"`
+	Tags             []Tag         `json:"tags"`
+	Attachments      []Attachment  `json:"attachments"`
+	AssetID          string        `json:"assetId"`
+	Fields           []EntityField `json:"fields"`
+	Parent           *ParentRef    `json:"parent"`
+	Manufacturer     string        `json:"manufacturer"`
+	ModelNumber      string        `json:"modelNumber"`
+	SerialNumber     string        `json:"serialNumber"`
+	Notes            string        `json:"notes"`
+	ImageID          string        `json:"imageId"`
+	Quantity         float64       `json:"quantity"`
+	Insured          bool          `json:"insured"`
+	Archived         bool          `json:"archived"`
+	LifetimeWarranty bool          `json:"lifetimeWarranty"`
+	PurchaseFrom     string        `json:"purchaseFrom"`
+	PurchaseDate     string        `json:"purchaseDate"`
+	PurchasePrice    float64       `json:"purchasePrice"`
+	WarrantyExpires  string        `json:"warrantyExpires"`
+	WarrantyDetails  string        `json:"warrantyDetails"`
+	UpdatedAt        time.Time     `json:"updatedAt"`
 }
 
 // EntityCreate — POST /v1/entities. Only Name is required. No location field.
@@ -112,23 +126,24 @@ type EntityCreate struct {
 // EntityUpdate — PATCH /v1/entities/{id}. Name required by the API. Pointer
 // fields let callers send only what changed; nil is omitted.
 type EntityUpdate struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Manufacturer     *string  `json:"manufacturer,omitempty"`
-	ModelNumber      *string  `json:"modelNumber,omitempty"`
-	SerialNumber     *string  `json:"serialNumber,omitempty"`
-	AssetID          *string  `json:"assetId,omitempty"`
-	Notes            *string  `json:"notes,omitempty"`
-	Description      *string  `json:"description,omitempty"`
-	Quantity         *float64 `json:"quantity,omitempty"`
-	Insured          *bool    `json:"insured,omitempty"`
-	Archived         *bool    `json:"archived,omitempty"`
-	LifetimeWarranty *bool    `json:"lifetimeWarranty,omitempty"`
-	PurchaseFrom     *string  `json:"purchaseFrom,omitempty"`
-	PurchaseDate     *string  `json:"purchaseDate,omitempty"`
-	PurchasePrice    *float64 `json:"purchasePrice,omitempty"`
-	WarrantyExpires  *string  `json:"warrantyExpires,omitempty"`
-	WarrantyDetails  *string  `json:"warrantyDetails,omitempty"`
-	ParentID         *string  `json:"parentId,omitempty"`
-	TagIDs           []string `json:"tagIds,omitempty"`
+	ID               string        `json:"id"`
+	Name             string        `json:"name"`
+	Manufacturer     *string       `json:"manufacturer,omitempty"`
+	ModelNumber      *string       `json:"modelNumber,omitempty"`
+	SerialNumber     *string       `json:"serialNumber,omitempty"`
+	AssetID          *string       `json:"assetId,omitempty"`
+	Notes            *string       `json:"notes,omitempty"`
+	Description      *string       `json:"description,omitempty"`
+	Quantity         *float64      `json:"quantity,omitempty"`
+	Insured          *bool         `json:"insured,omitempty"`
+	Archived         *bool         `json:"archived,omitempty"`
+	LifetimeWarranty *bool         `json:"lifetimeWarranty,omitempty"`
+	PurchaseFrom     *string       `json:"purchaseFrom,omitempty"`
+	PurchaseDate     *string       `json:"purchaseDate,omitempty"`
+	PurchasePrice    *float64      `json:"purchasePrice,omitempty"`
+	WarrantyExpires  *string       `json:"warrantyExpires,omitempty"`
+	WarrantyDetails  *string       `json:"warrantyDetails,omitempty"`
+	ParentID         *string       `json:"parentId,omitempty"`
+	Fields           []EntityField `json:"fields,omitempty"`
+	TagIDs           []string      `json:"tagIds,omitempty"`
 }
