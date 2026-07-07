@@ -41,7 +41,9 @@ func (f *fakeAPI) UploadAttachment(_ context.Context, id, name, t string, p bool
 	f.uploads++
 	return f.details[id], nil
 }
-func (f *fakeAPI) EnsureTag(_ context.Context, name string) (string, error) { return "tag-unverified", nil }
+func (f *fakeAPI) EnsureTag(_ context.Context, name string) (string, error) {
+	return "tag-unverified", nil
+}
 
 type fakeDisc struct {
 	res       *discovery.Result
@@ -155,10 +157,11 @@ func TestSkipIfManualExists(t *testing.T) {
 	}
 }
 
-func TestEmptyMetadataNoSearch(t *testing.T) {
+func TestNoSearchableIdentity(t *testing.T) {
+	// mfr, model AND name all empty => nothing to search on.
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "", "")},
+		details: map[string]*homebox.EntityOut{"e1": {ID: "e1", Name: ""}},
 	}
 	disc := &fakeDisc{}
 	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
@@ -168,11 +171,32 @@ func TestEmptyMetadataNoSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if disc.discCalls != 0 {
-		t.Fatal("no manufacturer/model => must not search")
+		t.Fatal("no searchable identity => must not search")
 	}
 	rec, _ := st.Get(context.Background(), "e1")
 	if rec.Status != store.StatusNotFound {
 		t.Fatalf("expected notfound, got %s", rec.Status)
+	}
+}
+
+func TestNameOnlySearches(t *testing.T) {
+	// name present, no mfr/model => still searches (subject = name).
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": {ID: "e1", Name: "PlayStation Portal"}},
+	}
+	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/m.pdf"}, Confidence: 0.95}, body: []byte("%PDF")}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if disc.discCalls != 1 {
+		t.Fatalf("name-only item should be searched, discCalls=%d", disc.discCalls)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("expected attach, uploads=%d", api.uploads)
 	}
 }
 

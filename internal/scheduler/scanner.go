@@ -153,9 +153,9 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	}
 
 	item := discovery.Item{Manufacturer: detail.Manufacturer, ModelNumber: detail.ModelNumber, Name: detail.Name}
-	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" {
-		// Nothing to search on; record and move on (no notification noise).
-		log.Printf("skip %q — no manufacturer/model to search on", detail.Name)
+	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" && strings.TrimSpace(item.Name) == "" {
+		// Truly nothing to search on.
+		log.Printf("skip %q — no searchable identity", detail.Name)
 		base.Status = store.StatusNotFound
 		base.Attempts++
 		return s.store.Upsert(ctx, base)
@@ -166,6 +166,9 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		return err
 	}
 	base.Attempts++
+	if res == nil {
+		res = &discovery.Result{}
+	}
 
 	switch {
 	case res.Best != nil && res.Confidence >= s.cfg.AutoAttachThreshold:

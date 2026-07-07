@@ -48,11 +48,11 @@ func TestPipelineRulesWinner(t *testing.T) {
 	srvWithResults(t, srv, results)
 
 	e := NewEngine(Options{
-		SearxngURL:    srv.URL,
-		Queries:       []string{"{manufacturer} {modelNumber} manual"},
-		MinPDFBytes:   1000,
-		MaxPDFBytes:   50_000_000,
-		RequireModel:  true,
+		SearxngURL:   srv.URL,
+		Queries:      []string{"{manufacturer} {modelNumber} manual"},
+		MinPDFBytes:  1000,
+		MaxPDFBytes:  50_000_000,
+		RequireModel: true,
 	}, failReranker{t}) // reranker must NOT be called on a clear winner
 
 	res, err := e.Discover(context.Background(), Item{Manufacturer: "Acme", ModelNumber: "W-1000", Name: "Widget"})

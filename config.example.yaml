@@ -13,9 +13,10 @@ schedule:
 
 discovery:
   searxng_url: http://searxng:8080
+  # {subject} = manufacturer+model when a model is known, else manufacturer+name.
   queries:
-    - "{manufacturer} {modelNumber} user manual filetype:pdf"
-    - "{manufacturer} {modelNumber} datasheet pdf"
+    - "{subject} user manual filetype:pdf"
+    - "{subject} manual pdf"
   max_candidates: 8
   min_pdf_bytes: 20000
   max_pdf_bytes: 52428800

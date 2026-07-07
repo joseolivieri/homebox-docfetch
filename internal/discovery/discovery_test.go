@@ -38,12 +38,17 @@ func TestClearWinner(t *testing.T) {
 func TestModelGate(t *testing.T) {
 	e := NewEngine(Options{RequireModel: true}, nil)
 	res := &Result{Best: &Candidate{ModelMatch: false}, Confidence: 0.9}
-	if e.applyModelGate(res).Confidence != 0 {
+	if e.applyModelGate(res, true).Confidence != 0 {
 		t.Fatal("expected confidence zeroed when model required but absent")
 	}
 	res2 := &Result{Best: &Candidate{ModelMatch: true}, Confidence: 0.9}
-	if e.applyModelGate(res2).Confidence != 0.9 {
+	if e.applyModelGate(res2, true).Confidence != 0.9 {
 		t.Fatal("expected confidence preserved on model match")
+	}
+	// name-only item (requireModel=false) keeps confidence despite no model match
+	res3 := &Result{Best: &Candidate{ModelMatch: false}, Confidence: 0.9}
+	if e.applyModelGate(res3, false).Confidence != 0.9 {
+		t.Fatal("expected confidence preserved when model not required")
 	}
 }
 

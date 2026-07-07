@@ -34,6 +34,16 @@ func (i Item) desc() string {
 	return strings.Join(parts, " ")
 }
 
+// subject is the search subject: manufacturer+model when a model number is
+// known, otherwise manufacturer+name (or just name). Keeps queries clean
+// whether the item has structured metadata or only a name.
+func (i Item) subject() string {
+	if strings.TrimSpace(i.ModelNumber) != "" {
+		return strings.TrimSpace(i.Manufacturer + " " + i.ModelNumber)
+	}
+	return strings.TrimSpace(i.Manufacturer + " " + i.Name)
+}
+
 // Candidate is a scored search result.
 type Candidate struct {
 	Title       string
@@ -100,6 +110,7 @@ func norm(s string) string { return nonAlnum.ReplaceAllString(strings.ToLower(s)
 // renderQueries substitutes {manufacturer}/{modelNumber}/{name} in templates.
 func (e *Engine) renderQueries(it Item) []string {
 	r := strings.NewReplacer(
+		"{subject}", it.subject(),
 		"{manufacturer}", it.Manufacturer,
 		"{modelNumber}", it.ModelNumber,
 		"{name}", it.Name,
@@ -113,6 +124,10 @@ func (e *Engine) renderQueries(it Item) []string {
 
 // Discover runs the full pipeline for one item.
 func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
+	// Model-match gating only makes sense when the item actually has a model
+	// number; name-only items rely on the LLM rerank + confidence instead.
+	requireModel := e.opt.RequireModel && strings.TrimSpace(it.ModelNumber) != ""
+
 	// 1. Gather candidates across query templates, deduped by URL.
 	seen := map[string]bool{}
 	var cands []Candidate
@@ -154,7 +169,7 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 	if best, ok := clearWinner(cands); ok {
 		res.Best = best
 		res.Confidence = 0.9
-		return e.applyModelGate(res), nil
+		return e.applyModelGate(res, requireModel), nil
 	}
 
 	// 4. Ambiguous -> LLM rerank if available.
@@ -169,7 +184,7 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 			res.Best = &cands[idx]
 			res.Confidence = conf
 			res.UsedLLM = true
-			return e.applyModelGate(res), nil
+			return e.applyModelGate(res, requireModel), nil
 		}
 		// on rerank error/none, fall through to score-based pick
 	}
@@ -183,12 +198,12 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 	}
 	res.Best = best
 	res.Confidence = 0.4
-	return e.applyModelGate(res), nil
+	return e.applyModelGate(res, requireModel), nil
 }
 
 // applyModelGate zeroes confidence when a model match is required but absent.
-func (e *Engine) applyModelGate(res *Result) *Result {
-	if e.opt.RequireModel && res.Best != nil && !res.Best.ModelMatch {
+func (e *Engine) applyModelGate(res *Result, requireModel bool) *Result {
+	if requireModel && res.Best != nil && !res.Best.ModelMatch {
 		res.Confidence = 0
 	}
 	return res

@@ -47,10 +47,10 @@ type EntitySummary struct {
 
 // EntityListResult — paginated list wrapper. Results live under Items.
 type EntityListResult struct {
-	Page      int             `json:"page"`
-	PageSize  int             `json:"pageSize"`
-	Total     int             `json:"total"`
-	Items     []EntitySummary `json:"items"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"pageSize"`
+	Total    int             `json:"total"`
+	Items    []EntitySummary `json:"items"`
 }
 
 // Attachment — sub-object of EntityOut.attachments[].
@@ -92,19 +92,19 @@ type EntityCreate struct {
 // EntityUpdate — PATCH /v1/entities/{id}. Name required by the API. Pointer
 // fields let callers send only what changed; nil is omitted.
 type EntityUpdate struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	Manufacturer    *string    `json:"manufacturer,omitempty"`
-	ModelNumber     *string    `json:"modelNumber,omitempty"`
-	SerialNumber    *string    `json:"serialNumber,omitempty"`
-	AssetID         *string    `json:"assetId,omitempty"`
-	Notes           *string    `json:"notes,omitempty"`
-	Description     *string    `json:"description,omitempty"`
-	PurchaseFrom    *string    `json:"purchaseFrom,omitempty"`
-	PurchaseDate    *string    `json:"purchaseDate,omitempty"`
-	PurchasePrice   *float64   `json:"purchasePrice,omitempty"`
-	WarrantyExpires *string    `json:"warrantyExpires,omitempty"`
-	WarrantyDetails *string    `json:"warrantyDetails,omitempty"`
-	ParentID        *string    `json:"parentId,omitempty"`
-	TagIDs          []string   `json:"tagIds,omitempty"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Manufacturer    *string  `json:"manufacturer,omitempty"`
+	ModelNumber     *string  `json:"modelNumber,omitempty"`
+	SerialNumber    *string  `json:"serialNumber,omitempty"`
+	AssetID         *string  `json:"assetId,omitempty"`
+	Notes           *string  `json:"notes,omitempty"`
+	Description     *string  `json:"description,omitempty"`
+	PurchaseFrom    *string  `json:"purchaseFrom,omitempty"`
+	PurchaseDate    *string  `json:"purchaseDate,omitempty"`
+	PurchasePrice   *float64 `json:"purchasePrice,omitempty"`
+	WarrantyExpires *string  `json:"warrantyExpires,omitempty"`
+	WarrantyDetails *string  `json:"warrantyDetails,omitempty"`
+	ParentID        *string  `json:"parentId,omitempty"`
+	TagIDs          []string `json:"tagIds,omitempty"`
 }

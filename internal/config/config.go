@@ -45,13 +45,13 @@ type Schedule struct {
 }
 
 type Discovery struct {
-	SearxngURL     string   `yaml:"searxng_url"`
-	Queries        []string `yaml:"queries"`
-	MaxCandidates  int      `yaml:"max_candidates"`
-	MinPDFBytes    int64    `yaml:"min_pdf_bytes"`
-	MaxPDFBytes    int64    `yaml:"max_pdf_bytes"`
-	RateLimitPerMin int     `yaml:"rate_limit_per_min"`
-	BackoffBase    time.Duration `yaml:"backoff_base"`
+	SearxngURL      string        `yaml:"searxng_url"`
+	Queries         []string      `yaml:"queries"`
+	MaxCandidates   int           `yaml:"max_candidates"`
+	MinPDFBytes     int64         `yaml:"min_pdf_bytes"`
+	MaxPDFBytes     int64         `yaml:"max_pdf_bytes"`
+	RateLimitPerMin int           `yaml:"rate_limit_per_min"`
+	BackoffBase     time.Duration `yaml:"backoff_base"`
 }
 
 type LLM struct {
@@ -68,8 +68,8 @@ type Confidence struct {
 }
 
 type Attach struct {
-	DocType          string `yaml:"doc_type"`
-	SkipIfManualExists bool `yaml:"skip_if_manual_exists"`
+	DocType            string `yaml:"doc_type"`
+	SkipIfManualExists bool   `yaml:"skip_if_manual_exists"`
 }
 
 type Intake struct {
@@ -146,10 +146,10 @@ func (c *Config) defaults() {
 func (c *Config) validate() error {
 	var missing []string
 	req := map[string]string{
-		"homebox.url":              c.Homebox.URL,
-		"homebox.token":            c.Homebox.Token,
-		"intake.unverified_tag":    c.Intake.UnverifiedTag,
-		"intake.provenance_tag":    c.Intake.ProvenanceTag,
+		"homebox.url":           c.Homebox.URL,
+		"homebox.token":         c.Homebox.Token,
+		"intake.unverified_tag": c.Intake.UnverifiedTag,
+		"intake.provenance_tag": c.Intake.ProvenanceTag,
 	}
 	for k, v := range req {
 		if v == "" {
