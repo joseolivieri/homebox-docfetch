@@ -106,6 +106,7 @@ type Portal struct {
 	DefaultLocation    string   `yaml:"default_location"`
 	IntakePhotos       []string `yaml:"intake_photos"`
 	WarrantyEstimate   bool     `yaml:"warranty_estimate"`
+	PhotoMinConfidence float64  `yaml:"photo_min_confidence"` // official-photo gate; 0 -> default 0.7
 }
 
 type Vision struct {

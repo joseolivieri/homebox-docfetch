@@ -48,34 +48,44 @@ func (e *Engine) SearchImages(ctx context.Context, query string) ([]ImageResult,
 	return out.Results, nil
 }
 
-// BestProductImage picks and downloads a plausible official product image for
-// the subject. Rules-only: prefer results whose title/url mention the subject
-// tokens, skip obvious junk hosts, sanity-check content type and size. Returns
-// nil bytes when nothing qualifies (caller skips the photo — no junk images).
-func (e *Engine) BestProductImage(ctx context.Context, subject string, maxBytes int64) (data []byte, mime string, srcURL string, err error) {
+// ImageCandidate is a downloaded, rules-prefiltered product-image candidate
+// ready for vision ranking.
+type ImageCandidate struct {
+	Data  []byte
+	Mime  string
+	Src   string
+	Title string
+}
+
+// ProductImageCandidates gathers up to max downloadable image candidates for
+// the subject: junk hosts skipped, loose topical token match, size sanity.
+// Rules only prefilter here — the caller ranks with the vision model and
+// applies its confidence threshold (no junk attach on a weak field).
+func (e *Engine) ProductImageCandidates(ctx context.Context, subject string, max int, maxBytes int64) ([]ImageCandidate, error) {
 	results, err := e.SearchImages(ctx, subject)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	probe := norm(subject)
+	var out []ImageCandidate
 	for _, r := range results {
-		if r.ImgSrc == "" {
+		if len(out) >= max {
+			break
+		}
+		if r.ImgSrc == "" || isJunkImageHost(r.ImgSrc) {
 			continue
 		}
 		hay := norm(r.Title) + norm(r.URL) + norm(r.ImgSrc)
 		if probe != "" && !strings.Contains(hay, firstToken(probe)) {
 			continue
 		}
-		if isJunkImageHost(r.ImgSrc) {
-			continue
-		}
 		b, m, derr := e.downloadImage(ctx, r.ImgSrc, maxBytes)
 		if derr != nil || len(b) < 5_000 { // tiny images are thumbnails/icons
 			continue
 		}
-		return b, m, r.ImgSrc, nil
+		out = append(out, ImageCandidate{Data: b, Mime: m, Src: r.ImgSrc, Title: r.Title})
 	}
-	return nil, "", "", nil
+	return out, nil
 }
 
 func (e *Engine) downloadImage(ctx context.Context, u string, maxBytes int64) ([]byte, string, error) {

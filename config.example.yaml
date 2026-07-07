@@ -69,5 +69,6 @@ portal:
   default_location: null
   intake_photos: [sticker, receipt]
   warranty_estimate: true
+  photo_min_confidence: 0.7        # official photo attaches only at/above this; below -> none
 
 state_db: /data/docfetch.db

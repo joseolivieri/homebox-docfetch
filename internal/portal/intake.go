@@ -113,8 +113,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Attach intake photos. Personal product photo becomes the primary image;
-	// the official-photo fetch below still runs and attaches alongside it.
+	// the official-photo fetch below still runs and attaches alongside it. Its
+	// bytes are also retained as the vision reference for ranking official-photo
+	// candidates (reverse-image-search-ish matching).
 	day := time.Now().Format("2006-01-02")
+	var personal *llm.IntakeImage
 	attachments := []struct {
 		field, attType, stem string
 		primary              bool
@@ -128,6 +131,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
+		if a.field == "product" {
+			p := img
+			personal = &p
+		}
 		fname := a.stem + extFor(img.Mime)
 		if _, err := s.hb.UploadAttachment(ctx, ent.ID, fname, a.attType, a.primary, bytes.NewReader(img.Data)); err != nil {
 			log.Printf("portal: %s attach failed for %s: %v", a.field, ent.ID, err)
@@ -136,7 +143,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Background enrichment chain (photo, warranty, docs). Detached from the
 	// request context — phone may navigate away immediately.
-	go s.postIntake(context.WithoutCancel(ctx), ent.ID)
+	go s.postIntake(context.WithoutCancel(ctx), ent.ID, personal)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"id":  ent.ID,
@@ -145,8 +152,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // postIntake runs the slow enrichment after the entity exists: official product
-// photo, warranty estimate, then the standard enrich+doc-fetch pipeline.
-func (s *Server) postIntake(ctx context.Context, id string) {
+// photo (vision-ranked, thresholded), warranty estimate, then the standard
+// enrich+doc-fetch pipeline. personal, when non-nil, is the user's own photo of
+// the item and anchors the official-photo ranking.
+func (s *Server) postIntake(ctx context.Context, id string, personal *llm.IntakeImage) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -161,23 +170,11 @@ func (s *Server) postIntake(ctx context.Context, id string) {
 	}
 
 	// Official product photo — fetched even when a personal photo was provided
-	// at intake (both live on the entity). Primary only when nothing is primary
-	// yet; a personal intake photo keeps that slot. No junk on miss.
+	// at intake (both live on the entity). Candidates are vision-ranked (against
+	// the personal photo when available) and gated by photo_min_confidence:
+	// below the bar, NO photo attaches. Confidence + source recorded in notes.
 	if subject != "" {
-		data, mime, src, err := s.eng.BestProductImage(ctx, subject, 10<<20)
-		switch {
-		case err != nil:
-			log.Printf("postIntake %s: image search: %v", id, err)
-		case len(data) == 0:
-			log.Printf("postIntake %s: no suitable product image (skipping)", id)
-		default:
-			fname := "product-official" + extFor(mime)
-			if _, err := s.hb.UploadAttachment(ctx, id, fname, "photo", detail.ImageID == "", bytes.NewReader(data)); err != nil {
-				log.Printf("postIntake %s: photo attach: %v", id, err)
-			} else {
-				log.Printf("postIntake %s: official product photo attached (%s)", id, src)
-			}
-		}
+		s.fetchOfficialPhoto(ctx, detail, subject, personal)
 	}
 
 	// Warranty estimate — needs a purchase date anchor and the feature enabled.
@@ -188,6 +185,61 @@ func (s *Server) postIntake(ctx context.Context, id string) {
 	// Standard pipeline: metadata enrichment + manual fetch + gates.
 	if err := s.sc.ProcessEntity(ctx, id); err != nil {
 		log.Printf("postIntake %s: pipeline: %v", id, err)
+	}
+}
+
+// fetchOfficialPhoto gathers image candidates, has the vision model pick the
+// best (matched against the personal reference photo when present), applies the
+// confidence threshold, attaches, and records provenance in notes.
+func (s *Server) fetchOfficialPhoto(ctx context.Context, detail *homebox.EntityOut, subject string, personal *llm.IntakeImage) {
+	cands, err := s.eng.ProductImageCandidates(ctx, subject, 5, 10<<20)
+	if err != nil {
+		log.Printf("postIntake %s: image search: %v", detail.ID, err)
+		return
+	}
+	if len(cands) == 0 {
+		log.Printf("postIntake %s: no product image candidates (skipping)", detail.ID)
+		return
+	}
+	imgs := make([]llm.IntakeImage, len(cands))
+	for i, c := range cands {
+		imgs[i] = llm.IntakeImage{Data: c.Data, Mime: c.Mime}
+	}
+	best, conf, err := s.ai.PickProductImage(ctx, s.cfg.LLM.VisionModel, subject, personal, imgs)
+	if err != nil {
+		log.Printf("postIntake %s: image rank: %v", detail.ID, err)
+		return
+	}
+	minConf := s.cfg.Portal.PhotoMinConfidence
+	if minConf == 0 {
+		minConf = 0.7
+	}
+	if best < 0 || conf < minConf {
+		log.Printf("postIntake %s: no photo above threshold (best=%d conf=%.2f min=%.2f) — skipping", detail.ID, best, conf, minConf)
+		return
+	}
+	chosen := cands[best]
+	fname := "product-official" + extFor(chosen.Mime)
+	if _, err := s.hb.UploadAttachment(ctx, detail.ID, fname, "photo", detail.ImageID == "", bytes.NewReader(chosen.Data)); err != nil {
+		log.Printf("postIntake %s: photo attach: %v", detail.ID, err)
+		return
+	}
+	log.Printf("postIntake %s: official product photo attached (conf=%.2f ref=%v src=%s)", detail.ID, conf, personal != nil, chosen.Src)
+
+	// Provenance note (fresh fetch + full merge so nothing gets blanked).
+	fresh, err := s.hb.GetEntity(ctx, detail.ID)
+	if err != nil {
+		return
+	}
+	upd := fullUpdate(fresh)
+	ref := ""
+	if personal != nil {
+		ref = ", matched to your photo"
+	}
+	n := strings.TrimSpace(fresh.Notes + fmt.Sprintf("\ndocfetch: official photo attached (conf %.2f%s) from %s", conf, ref, chosen.Src))
+	upd.Notes = &n
+	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
+		log.Printf("postIntake %s: photo note put: %v", detail.ID, err)
 	}
 }
 
