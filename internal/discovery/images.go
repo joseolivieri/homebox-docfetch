@@ -66,7 +66,7 @@ func (e *Engine) ProductImageCandidates(ctx context.Context, subject string, max
 	if err != nil {
 		return nil, err
 	}
-	probe := norm(subject)
+	tokens := subjectTokens(subject)
 	var out []ImageCandidate
 	for _, r := range results {
 		if len(out) >= max {
@@ -76,7 +76,7 @@ func (e *Engine) ProductImageCandidates(ctx context.Context, subject string, max
 			continue
 		}
 		hay := norm(r.Title) + norm(r.URL) + norm(r.ImgSrc)
-		if probe != "" && !strings.Contains(hay, firstToken(probe)) {
+		if !anyToken(hay, tokens) {
 			continue
 		}
 		b, m, derr := e.downloadImage(ctx, r.ImgSrc, maxBytes)
@@ -122,11 +122,27 @@ func isJunkImageHost(u string) bool {
 	return false
 }
 
-// firstToken returns the first ~8 chars of the normalized subject — enough to
-// require topical relevance without demanding an exact match.
-func firstToken(probe string) string {
-	if len(probe) > 8 {
-		return probe[:8]
+// subjectTokens splits the subject into normalized words (>=3 chars). A
+// candidate is topical if it contains ANY of them — a loose prefilter; the
+// vision ranker + confidence threshold do the real quality filtering.
+func subjectTokens(subject string) []string {
+	var out []string
+	for _, w := range strings.Fields(subject) {
+		if n := norm(w); len(n) >= 3 {
+			out = append(out, n)
+		}
 	}
-	return probe
+	return out
+}
+
+func anyToken(hay string, tokens []string) bool {
+	if len(tokens) == 0 {
+		return true
+	}
+	for _, t := range tokens {
+		if strings.Contains(hay, t) {
+			return true
+		}
+	}
+	return false
 }
