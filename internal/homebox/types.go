@@ -53,6 +53,14 @@ type EntityListResult struct {
 	Items    []EntitySummary `json:"items"`
 }
 
+// ParentRef is the subset of the parent entity we need to round-trip.
+// CRITICAL: PUT is a full replace — omitting parentId CLEARS the parent
+// (verified live), so every full-merge update must copy it.
+type ParentRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Attachment — sub-object of EntityOut.attachments[].
 type Attachment struct {
 	ID      string `json:"id"`
@@ -72,6 +80,7 @@ type EntityOut struct {
 	Tags             []Tag        `json:"tags"`
 	Attachments      []Attachment `json:"attachments"`
 	AssetID          string       `json:"assetId"`
+	Parent           *ParentRef   `json:"parent"`
 	Manufacturer     string       `json:"manufacturer"`
 	ModelNumber      string       `json:"modelNumber"`
 	SerialNumber     string       `json:"serialNumber"`

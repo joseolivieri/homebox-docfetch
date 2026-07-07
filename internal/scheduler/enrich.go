@@ -166,6 +166,10 @@ func fullUpdateFrom(d *homebox.EntityOut) homebox.EntityUpdate {
 	upd.PurchasePrice = &d.PurchasePrice
 	upd.WarrantyExpires = cp(d.WarrantyExpires)
 	upd.WarrantyDetails = cp(d.WarrantyDetails)
+	if d.Parent != nil && d.Parent.ID != "" {
+		// PUT is a full replace; omitting parentId clears the location.
+		upd.ParentID = cp(d.Parent.ID)
+	}
 	var tags []string
 	for _, t := range d.Tags {
 		tags = append(tags, t.ID)
