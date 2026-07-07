@@ -122,6 +122,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		field, attType, stem string
 		primary              bool
 	}{
+		{"sticker", "photo", "model-sticker", false},
 		{"receipt", "receipt", "receipt-" + day, false},
 		{"product", "photo", "product-personal", true},
 		{"warranty", "warranty", "warranty-" + day, false},

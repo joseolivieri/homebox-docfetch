@@ -199,7 +199,7 @@ async function createItem() {
                    'purchaseDate','purchasePrice','warrantyMonths','warrantyClaimsUrl','warrantyDetails'])
     fd.append(k, $('c_' + k).value.trim());
   fd.append('locationId', $('c_location').value);
-  for (const s of ['receipt', 'product', 'warranty'])   // photos attach to the item
+  for (const s of ['sticker', 'receipt', 'product', 'warranty'])   // all photos attach to the item
     if (files[s]) fd.append(s, files[s]);
   try {
     const r = await fetch('/api/create', {method: 'POST', body: fd});
