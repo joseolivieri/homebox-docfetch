@@ -70,5 +70,6 @@ portal:
   intake_photos: [sticker, receipt]
   warranty_estimate: true
   photo_min_confidence: 0.7        # official photo attaches only at/above this; below -> none
+  public_url: https://docfetch.ingress-1.jentaculum.net   # enables ntfy approve buttons
 
 state_db: /data/docfetch.db

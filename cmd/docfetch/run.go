@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
@@ -64,6 +65,8 @@ func build(cfg *config.Config) (*deps, error) {
 		BackoffBase:         cfg.Discovery.BackoffBase,
 		UnverifiedTag:       cfg.Intake.UnverifiedTag,
 		HomeboxURL:          cfg.Homebox.URL,
+		PortalURL:           strings.TrimRight(cfg.Portal.PublicURL, "/"),
+		SignKey:             cfg.Homebox.Token,
 	})
 
 	// Metadata enrichment (Phase 1.5) needs both search and an LLM extractor.

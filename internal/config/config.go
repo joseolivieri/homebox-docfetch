@@ -107,6 +107,7 @@ type Portal struct {
 	IntakePhotos       []string `yaml:"intake_photos"`
 	WarrantyEstimate   bool     `yaml:"warranty_estimate"`
 	PhotoMinConfidence float64  `yaml:"photo_min_confidence"` // official-photo gate; 0 -> default 0.7
+	PublicURL          string   `yaml:"public_url"`           // e.g. https://docfetch.ingress-1...; enables ntfy approve buttons
 }
 
 type Vision struct {

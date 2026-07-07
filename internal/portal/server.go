@@ -59,6 +59,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/locations", s.handleLocations)
 	mux.HandleFunc("/api/extract", s.handleExtract)
 	mux.HandleFunc("/api/create", s.handleCreate)
+	mux.HandleFunc("/api/approve", s.handleApprove)
 
 	srv := &http.Server{
 		Addr:              s.cfg.Portal.Listen,

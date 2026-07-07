@@ -137,6 +137,18 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(results) == 0 {
+			// SearXNG engines are flaky (observed: same query 29 then 0 results);
+			// one short retry recovers most transient empties.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+			if results, err = e.searxng(ctx, q); err != nil {
+				return nil, err
+			}
+		}
 		log.Printf("searxng %q -> %d results", q, len(results))
 		for _, r := range results {
 			if seen[r.URL] || r.URL == "" {

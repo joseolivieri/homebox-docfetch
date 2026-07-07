@@ -257,7 +257,31 @@ func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut
 		cands = append(cands, llm.Candidate{Title: r.Title, URL: r.URL, Snippet: truncate(r.Snippet, 150)})
 	}
 	est, err := s.ai.EstimateWarranty(ctx, subject, cands)
-	if err != nil || est.Months == 0 {
+	if err != nil || (est.Months == 0 && !est.Lifetime) {
+		return
+	}
+	// Lifetime warranty: set the native bool, no expiry math needed.
+	if est.Lifetime && est.Confidence >= 0.85 && est.Source != "" {
+		fresh, ferr := s.hb.GetEntity(ctx, detail.ID)
+		if ferr != nil {
+			return
+		}
+		upd := fullUpdate(fresh)
+		t := true
+		upd.LifetimeWarranty = &t
+		d := strings.TrimSpace(fresh.WarrantyDetails + "\ndocfetch: lifetime warranty per " + est.Source)
+		if est.ClaimsURL != "" {
+			d += "; claims: " + est.ClaimsURL
+		}
+		upd.WarrantyDetails = &d
+		if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
+			log.Printf("warranty lifetime put %s: %v", detail.ID, err)
+		} else {
+			log.Printf("warranty %s: lifetime (conf=%.2f)", detail.Name, est.Confidence)
+		}
+		return
+	}
+	if est.Months == 0 {
 		return
 	}
 	purchase, err := time.Parse("2006-01-02", strings.TrimSpace(detail.PurchaseDate[:10]))

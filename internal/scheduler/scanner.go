@@ -52,6 +52,8 @@ type Config struct {
 	BackoffBase         time.Duration
 	UnverifiedTag       string
 	HomeboxURL          string
+	PortalURL           string // public portal base; enables ntfy approve buttons
+	SignKey             string // HMAC key for approve links (the Homebox token)
 }
 
 type Scanner struct {
@@ -267,9 +269,14 @@ func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res
 	}
 	msg := notify.Message{
 		Title: "docfetch: review a manual",
-		Body:  fmt.Sprintf("%s — candidate found (confidence %.0f%%). Approve or ignore.", detail.Name, res.Confidence*100),
+		Body:  fmt.Sprintf("%s — candidate found (confidence %.0f%%). Tap to view; Attach to accept.", detail.Name, res.Confidence*100),
 		Click: res.Best.URL,
 		Tags:  []string{"page_facing_up"},
+	}
+	if s.cfg.PortalURL != "" && s.cfg.SignKey != "" {
+		msg.Actions = []string{
+			"http, Attach manual, " + ApproveURL(s.cfg.PortalURL, detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
+		}
 	}
 	if err := s.ntfy.Send(ctx, msg); err != nil {
 		return err

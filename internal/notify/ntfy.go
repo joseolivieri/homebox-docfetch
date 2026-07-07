@@ -27,12 +27,14 @@ func New(baseURL, topic, token string) *Ntfy {
 	}
 }
 
-// Message is a ntfy publish with optional title, click URL, and tags.
+// Message is a ntfy publish with optional title, click URL, tags, and action
+// buttons (raw ntfy Actions header entries, e.g. `http, Label, url, method=POST`).
 type Message struct {
-	Title string
-	Body  string
-	Click string   // URL opened when the notification is tapped
-	Tags  []string // ntfy emoji shortcodes / labels
+	Title   string
+	Body    string
+	Click   string   // URL opened when the notification is tapped
+	Tags    []string // ntfy emoji shortcodes / labels
+	Actions []string // ntfy action button specs, joined with "; "
 }
 
 // Send publishes to the configured topic. A nil/empty client (no ntfy_url) is a no-op.
@@ -52,6 +54,9 @@ func (n *Ntfy) Send(ctx context.Context, m Message) error {
 	}
 	if len(m.Tags) > 0 {
 		req.Header.Set("Tags", strings.Join(m.Tags, ","))
+	}
+	if len(m.Actions) > 0 {
+		req.Header.Set("Actions", strings.Join(m.Actions, "; "))
 	}
 	if n.token != "" {
 		req.Header.Set("Authorization", "Bearer "+n.token)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // ImageResult is one hit from SearXNG's image category.
@@ -65,6 +66,17 @@ func (e *Engine) ProductImageCandidates(ctx context.Context, subject string, max
 	results, err := e.SearchImages(ctx, subject)
 	if err != nil {
 		return nil, err
+	}
+	if len(results) == 0 {
+		// transient-empty retry, same rationale as the text search
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+		if results, err = e.SearchImages(ctx, subject); err != nil {
+			return nil, err
+		}
 	}
 	tokens := subjectTokens(subject)
 	var out []ImageCandidate
