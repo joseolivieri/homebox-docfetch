@@ -26,7 +26,7 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-const maxUploadBytes = 20 << 20 // 2 photos, phone-camera sized
+const maxUploadBytes = 40 << 20 // up to 4 phone-camera photos
 
 type Server struct {
 	cfg *config.Config
@@ -89,10 +89,12 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-// handleLocations lists location entities (entityType.isLocation) for the
-// optional dropdown. No create-location from the portal by design.
+// handleLocations lists location entities for the optional dropdown. The flat
+// /entities list only returns Item-type entities (verified live), so locations
+// come from /entities/tree; nesting is flattened into "Parent › Child" labels.
+// No create-location from the portal by design.
 func (s *Server) handleLocations(w http.ResponseWriter, r *http.Request) {
-	list, err := s.hb.ListEntities(r.Context(), 1, 200, nil)
+	tree, err := s.hb.Tree(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
@@ -102,16 +104,27 @@ func (s *Server) handleLocations(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	locs := []loc{}
-	for _, e := range list.Items {
-		if e.EntityType.IsLocation {
-			locs = append(locs, loc{ID: e.ID, Name: e.Name})
+	var walk func(nodes []homebox.TreeNode, prefix string)
+	walk = func(nodes []homebox.TreeNode, prefix string) {
+		for _, n := range nodes {
+			if n.Type != "location" {
+				continue
+			}
+			label := n.Name
+			if prefix != "" {
+				label = prefix + " › " + n.Name
+			}
+			locs = append(locs, loc{ID: n.ID, Name: label})
+			walk(n.Children, label)
 		}
 	}
+	walk(tree, "")
 	writeJSON(w, http.StatusOK, locs)
 }
 
-// handleExtract accepts 1-2 photos (multipart fields photo1/photo2) and returns
-// the vision extraction for the confirm screen.
+// handleExtract accepts intake photos (multipart fields sticker/receipt/warranty
+// — the personal product photo is not sent here; it carries no extractable data)
+// and returns the vision extraction for the confirm screen.
 func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -122,21 +135,10 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var images []llm.IntakeImage
-	for _, field := range []string{"photo1", "photo2"} {
-		f, hdr, err := r.FormFile(field)
-		if err != nil {
-			continue
+	for _, field := range []string{"sticker", "receipt", "warranty"} {
+		if img, ok := formImage(r, field); ok {
+			images = append(images, img)
 		}
-		data, err := io.ReadAll(io.LimitReader(f, maxUploadBytes))
-		f.Close()
-		if err != nil || len(data) == 0 {
-			continue
-		}
-		mime := hdr.Header.Get("Content-Type")
-		if !strings.HasPrefix(mime, "image/") {
-			mime = "image/jpeg"
-		}
-		images = append(images, llm.IntakeImage{Data: data, Mime: mime})
 	}
 	if len(images) == 0 {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("no photos submitted"))
@@ -148,7 +150,24 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the receipt image server-side for attach-on-create? Keep stateless:
-	// the client re-sends the receipt photo with /api/create instead.
+	// Stateless: the client re-sends the photos with /api/create for attaching.
 	writeJSON(w, http.StatusOK, ex)
+}
+
+// formImage reads one image field from a parsed multipart form.
+func formImage(r *http.Request, field string) (llm.IntakeImage, bool) {
+	f, hdr, err := r.FormFile(field)
+	if err != nil {
+		return llm.IntakeImage{}, false
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxUploadBytes))
+	if err != nil || len(data) == 0 {
+		return llm.IntakeImage{}, false
+	}
+	mime := hdr.Header.Get("Content-Type")
+	if !strings.HasPrefix(mime, "image/") {
+		mime = "image/jpeg"
+	}
+	return llm.IntakeImage{Data: data, Mime: mime}, true
 }

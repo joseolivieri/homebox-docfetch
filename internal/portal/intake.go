@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -36,8 +35,14 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Create with triage + provenance tags (and optional location parent).
 	create := homebox.EntityCreate{
-		Name:   name,
-		TagIDs: []string{s.unverifiedTagID, s.provenanceTagID},
+		Name:     name,
+		TagIDs:   []string{s.unverifiedTagID, s.provenanceTagID},
+		Quantity: 1,
+	}
+	if v := strings.TrimSpace(r.FormValue("quantity")); v != "" {
+		if q, err := strconv.ParseFloat(v, 64); err == nil && q >= 1 {
+			create.Quantity = q
+		}
 	}
 	if loc := strings.TrimSpace(r.FormValue("locationId")); loc != "" {
 		create.ParentID = loc
@@ -50,6 +55,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	// 2. PUT metadata (PATCH silently drops scalar metadata — spec §6).
 	upd := homebox.EntityUpdate{ID: ent.ID, Name: name, TagIDs: create.TagIDs}
+	upd.Quantity = &create.Quantity
 	set := func(dst **string, key string) {
 		if v := strings.TrimSpace(r.FormValue(key)); v != "" {
 			*dst = &v
@@ -68,6 +74,37 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if create.ParentID != "" {
 		upd.ParentID = &create.ParentID
 	}
+
+	// Warranty from the confirm screen (vision-extracted, user-corrected).
+	// Hard expiry only when both a duration and a purchase date exist (D11);
+	// details/claims link always recorded when present.
+	warrantyMonths := 0
+	if v := strings.TrimSpace(r.FormValue("warrantyMonths")); v != "" {
+		if m, err := strconv.Atoi(v); err == nil && m > 0 && m <= 360 {
+			warrantyMonths = m
+		}
+	}
+	var warrantyLines []string
+	if warrantyMonths > 0 {
+		warrantyLines = append(warrantyLines, fmt.Sprintf("%dmo warranty (from intake photo)", warrantyMonths))
+		if pd := strings.TrimSpace(r.FormValue("purchaseDate")); pd != "" {
+			if t, err := time.Parse("2006-01-02", pd); err == nil {
+				e := t.AddDate(0, warrantyMonths, 0).Format("2006-01-02")
+				upd.WarrantyExpires = &e
+			}
+		}
+	}
+	if v := strings.TrimSpace(r.FormValue("warrantyClaimsUrl")); v != "" {
+		warrantyLines = append(warrantyLines, "claims: "+v)
+	}
+	if v := strings.TrimSpace(r.FormValue("warrantyDetails")); v != "" {
+		warrantyLines = append(warrantyLines, v)
+	}
+	if len(warrantyLines) > 0 {
+		d := strings.Join(warrantyLines, "\n")
+		upd.WarrantyDetails = &d
+	}
+
 	note := "docfetch: created via photo intake " + time.Now().Format("2006-01-02")
 	upd.Notes = &note
 	if _, err := s.hb.PutEntity(ctx, ent.ID, upd); err != nil {
@@ -75,15 +112,25 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Attach receipt photo if provided.
-	if f, hdr, err := r.FormFile("receipt"); err == nil {
-		data, rerr := io.ReadAll(io.LimitReader(f, maxUploadBytes))
-		f.Close()
-		if rerr == nil && len(data) > 0 {
-			fname := "receipt-" + time.Now().Format("2006-01-02") + extFor(hdr.Header.Get("Content-Type"))
-			if _, err := s.hb.UploadAttachment(ctx, ent.ID, fname, "receipt", false, bytes.NewReader(data)); err != nil {
-				log.Printf("portal: receipt attach failed for %s: %v", ent.ID, err)
-			}
+	// 3. Attach intake photos. Personal product photo becomes the primary image;
+	// the official-photo fetch below still runs and attaches alongside it.
+	day := time.Now().Format("2006-01-02")
+	attachments := []struct {
+		field, attType, stem string
+		primary              bool
+	}{
+		{"receipt", "receipt", "receipt-" + day, false},
+		{"product", "photo", "product-personal", true},
+		{"warranty", "warranty", "warranty-" + day, false},
+	}
+	for _, a := range attachments {
+		img, ok := formImage(r, a.field)
+		if !ok {
+			continue
+		}
+		fname := a.stem + extFor(img.Mime)
+		if _, err := s.hb.UploadAttachment(ctx, ent.ID, fname, a.attType, a.primary, bytes.NewReader(img.Data)); err != nil {
+			log.Printf("portal: %s attach failed for %s: %v", a.field, ent.ID, err)
 		}
 	}
 
@@ -113,8 +160,10 @@ func (s *Server) postIntake(ctx context.Context, id string) {
 		subject = strings.TrimSpace(detail.Manufacturer + " " + detail.Name)
 	}
 
-	// Product photo (skip if the item already has an image; no junk on miss).
-	if detail.ImageID == "" && subject != "" {
+	// Official product photo — fetched even when a personal photo was provided
+	// at intake (both live on the entity). Primary only when nothing is primary
+	// yet; a personal intake photo keeps that slot. No junk on miss.
+	if subject != "" {
 		data, mime, src, err := s.eng.BestProductImage(ctx, subject, 10<<20)
 		switch {
 		case err != nil:
@@ -122,11 +171,11 @@ func (s *Server) postIntake(ctx context.Context, id string) {
 		case len(data) == 0:
 			log.Printf("postIntake %s: no suitable product image (skipping)", id)
 		default:
-			fname := "product" + extFor(mime)
-			if _, err := s.hb.UploadAttachment(ctx, id, fname, "photo", true, bytes.NewReader(data)); err != nil {
+			fname := "product-official" + extFor(mime)
+			if _, err := s.hb.UploadAttachment(ctx, id, fname, "photo", detail.ImageID == "", bytes.NewReader(data)); err != nil {
 				log.Printf("postIntake %s: photo attach: %v", id, err)
 			} else {
-				log.Printf("postIntake %s: product photo attached (%s)", id, src)
+				log.Printf("postIntake %s: official product photo attached (%s)", id, src)
 			}
 		}
 	}
@@ -170,14 +219,18 @@ func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut
 		return
 	}
 	upd := fullUpdate(fresh)
+	claims := ""
+	if est.ClaimsURL != "" {
+		claims = "; claims: " + est.ClaimsURL
+	}
 	if est.Confidence >= 0.85 && est.Source != "" {
 		e := expiry.Format("2006-01-02")
 		upd.WarrantyExpires = &e
-		d := strings.TrimSpace(fresh.WarrantyDetails + "\ndocfetch: " + strconv.Itoa(est.Months) + "mo standard warranty per " + est.Source)
+		d := strings.TrimSpace(fresh.WarrantyDetails + "\ndocfetch: " + strconv.Itoa(est.Months) + "mo standard warranty per " + est.Source + claims)
 		upd.WarrantyDetails = &d
 	} else {
 		// Uncertain: estimate note only, no hard expiry (decisions.md D11).
-		d := strings.TrimSpace(fresh.WarrantyDetails + fmt.Sprintf("\ndocfetch: est. %dmo from %s (unverified)", est.Months, purchase.Format("2006-01-02")))
+		d := strings.TrimSpace(fresh.WarrantyDetails + fmt.Sprintf("\ndocfetch: est. %dmo from %s (unverified)%s", est.Months, purchase.Format("2006-01-02"), claims))
 		upd.WarrantyDetails = &d
 	}
 	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {

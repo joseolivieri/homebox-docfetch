@@ -14,13 +14,16 @@
   .card { background: #1b1e26; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
   label { display: block; font-size: .8rem; color: #9aa0ab; margin: 10px 0 4px; }
   input, select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2c3140; background: #12141a; color: #e6e6e9; font-size: 1rem; }
-  .cap { display: flex; gap: 10px; }
-  .cap > div { flex: 1; }
-  .capbtn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .capbtn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
     width:100%; aspect-ratio: 1; border-radius: 12px; border: 2px dashed #2c3140; background:#12141a;
-    color:#9aa0ab; font-size:.85rem; cursor:pointer; overflow:hidden; position:relative; }
+    color:#9aa0ab; font-size:.8rem; cursor:pointer; overflow:hidden; position:relative; text-align:center; }
+  .capbtn .em { font-size:1.4rem; }
   .capbtn img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .capbtn .tag { position:absolute; bottom:6px; left:50%; transform:translateX(-50%); background:#000a;
+    padding:2px 8px; border-radius:8px; font-size:.7rem; color:#fff; display:none; }
   .capbtn.filled { border-style: solid; border-color:#3d7eff; }
+  .capbtn.filled .tag { display:block; }
   button.primary { width:100%; padding:14px; margin-top:14px; border:0; border-radius:10px;
     background:#3d7eff; color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
   button.primary:disabled { opacity:.45; }
@@ -28,6 +31,7 @@
   .err { color:#ff6b6b; font-size:.85rem; margin-top:10px; white-space:pre-wrap; }
   .ok { color:#51cf66; }
   #confirm, #done { display:none; }
+  .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   .spinner { display:inline-block; width:16px; height:16px; border:2px solid #fff3; border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-3px; margin-right:8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   a { color:#3d7eff; }
@@ -38,38 +42,65 @@
   <h1>📦 Homebox Intake</h1>
 
   <div id="capture" class="card">
-    <div class="cap">
+    <div class="grid2">
       <div>
-        <div class="capbtn" id="btn1" onclick="pick(1)"><span>🏷️</span><span>Model sticker</span></div>
-        <input type="file" id="photo1" accept="image/*" capture="environment" hidden>
+        <div class="capbtn" id="btn_sticker" onclick="pick('sticker')">
+          <span class="em">🏷️</span><span>Model sticker</span><span class="tag">sticker</span>
+        </div>
+        <input type="file" id="f_sticker" accept="image/*" hidden>
       </div>
       <div>
-        <div class="capbtn" id="btn2" onclick="pick(2)"><span>🧾</span><span>Receipt</span></div>
-        <input type="file" id="photo2" accept="image/*" capture="environment" hidden>
+        <div class="capbtn" id="btn_receipt" onclick="pick('receipt')">
+          <span class="em">🧾</span><span>Receipt</span><span class="tag">receipt</span>
+        </div>
+        <input type="file" id="f_receipt" accept="image/*" hidden>
+      </div>
+      <div>
+        <div class="capbtn" id="btn_product" onclick="pick('product')">
+          <span class="em">📷</span><span>Product photo</span><span class="tag">product</span>
+        </div>
+        <input type="file" id="f_product" accept="image/*" hidden>
+      </div>
+      <div>
+        <div class="capbtn" id="btn_warranty" onclick="pick('warranty')">
+          <span class="em">🛡️</span><span>Warranty info</span><span class="tag">warranty</span>
+        </div>
+        <input type="file" id="f_warranty" accept="image/*" hidden>
       </div>
     </div>
-    <div class="hint">Either photo works; both is best. Sticker gives identity, receipt gives purchase info.</div>
+    <div class="hint">All optional, any combination. Sticker → identity, receipt → purchase info,
+      product → your photo of the item, warranty → box panel or webpage with terms.</div>
     <button class="primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
     <div class="err" id="capErr"></div>
   </div>
 
   <div id="confirm" class="card">
-    <label>Name *</label><input id="f_name">
-    <label>Manufacturer</label><input id="f_manufacturer">
-    <label>Model number</label><input id="f_modelNumber">
-    <label>Serial number</label><input id="f_serialNumber">
-    <label>Purchased from</label><input id="f_purchaseFrom">
-    <label>Purchase date</label><input id="f_purchaseDate" type="date">
-    <label>Price</label><input id="f_purchasePrice" type="number" step="0.01" inputmode="decimal">
+    <label>Name *</label><input id="c_name">
+    <div class="row2">
+      <div><label>Quantity</label><input id="c_quantity" type="number" inputmode="numeric" pattern="[0-9]*" min="1" step="1" value="1"></div>
+      <div><label>Model number</label><input id="c_modelNumber"></div>
+    </div>
+    <label>Manufacturer</label><input id="c_manufacturer">
+    <label>Serial number</label><input id="c_serialNumber">
+    <div class="row2">
+      <div><label>Purchase date</label><input id="c_purchaseDate" type="date"></div>
+      <div><label>Price</label><input id="c_purchasePrice" type="number" step="0.01" inputmode="decimal"></div>
+    </div>
+    <label>Purchased from</label><input id="c_purchaseFrom">
+    <div class="row2">
+      <div><label>Warranty (months)</label><input id="c_warrantyMonths" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1"></div>
+      <div><label>Claims URL</label><input id="c_warrantyClaimsUrl" type="url" placeholder="https://…"></div>
+    </div>
+    <label>Warranty notes</label><input id="c_warrantyDetails">
     <label>Location (optional)</label>
-    <select id="f_location"><option value="">— unset —</option></select>
+    <select id="c_location"><option value="">— unset —</option></select>
     <button class="primary" id="createBtn" onclick="createItem()">Add to Homebox</button>
     <div class="err" id="confErr"></div>
   </div>
 
   <div id="done" class="card">
     <p class="ok">✓ Item created.</p>
-    <p>Manual, product photo and metadata enrichment are running in the background.</p>
+    <p>Manual, official product photo, warranty lookup and metadata enrichment are running in the background.</p>
     <p><a id="itemLink" href="#" target="_blank">Open in Homebox</a></p>
     <button class="primary" onclick="location.reload()">Add another</button>
   </div>
@@ -77,17 +108,21 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let files = {1: null, 2: null};
+const SLOTS = ['sticker', 'receipt', 'product', 'warranty'];
+let files = {};
 
-function pick(n) {
-  const inp = $('photo' + n);
+// No `capture` attribute on the inputs: iOS presents its native sheet
+// (Photo Library / Take Photo / Choose File), so existing photos work.
+function pick(slot) {
+  const inp = $('f_' + slot);
   inp.onchange = () => {
     if (!inp.files.length) return;
-    files[n] = inp.files[0];
-    const btn = $('btn' + n);
+    files[slot] = inp.files[0];
+    const btn = $('btn_' + slot);
+    const tag = btn.querySelector('.tag').outerHTML;
     btn.classList.add('filled');
-    btn.innerHTML = '<img src="' + URL.createObjectURL(files[n]) + '">';
-    $('extractBtn').disabled = !(files[1] || files[2]);
+    btn.innerHTML = '<img src="' + URL.createObjectURL(files[slot]) + '">' + tag;
+    $('extractBtn').disabled = !SLOTS.some(s => files[s]);
   };
   inp.click();
 }
@@ -99,7 +134,7 @@ async function loadLocations() {
     for (const l of locs) {
       const o = document.createElement('option');
       o.value = l.id; o.textContent = l.name;
-      $('f_location').appendChild(o);
+      $('c_location').appendChild(o);
     }
   } catch (e) { /* dropdown stays with just unset */ }
 }
@@ -107,23 +142,34 @@ loadLocations();
 
 async function extract() {
   const btn = $('extractBtn');
+  // Product photo carries no extractable text — only send the other three.
+  const fd = new FormData();
+  let any = false;
+  for (const s of ['sticker', 'receipt', 'warranty'])
+    if (files[s]) { fd.append(s, files[s]); any = true; }
+  if (!any && files['product']) {
+    // Product-only intake: skip extraction, go straight to a blank confirm form.
+    $('confirm').style.display = 'block';
+    $('confirm').scrollIntoView({behavior: 'smooth'});
+    return;
+  }
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Reading…';
   $('capErr').textContent = '';
-  const fd = new FormData();
-  if (files[1]) fd.append('photo1', files[1]);
-  if (files[2]) fd.append('photo2', files[2]);
   try {
     const r = await fetch('/api/extract', {method: 'POST', body: fd});
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.status);
-    $('f_name').value = j.name || j.receipt.nameHint || '';
-    $('f_manufacturer').value = j.sticker.manufacturer || '';
-    $('f_modelNumber').value = j.sticker.modelNumber || '';
-    $('f_serialNumber').value = j.sticker.serialNumber || '';
-    $('f_purchaseFrom').value = j.receipt.purchaseFrom || '';
-    $('f_purchaseDate').value = j.receipt.purchaseDate || '';
-    $('f_purchasePrice').value = j.receipt.purchasePrice || '';
+    $('c_name').value = j.name || j.receipt.nameHint || '';
+    $('c_manufacturer').value = j.sticker.manufacturer || '';
+    $('c_modelNumber').value = j.sticker.modelNumber || '';
+    $('c_serialNumber').value = j.sticker.serialNumber || '';
+    $('c_purchaseFrom').value = j.receipt.purchaseFrom || '';
+    $('c_purchaseDate').value = j.receipt.purchaseDate || '';
+    $('c_purchasePrice').value = j.receipt.purchasePrice || '';
+    $('c_warrantyMonths').value = j.warranty.durationMonths || '';
+    $('c_warrantyClaimsUrl').value = j.warranty.claimsUrl || '';
+    $('c_warrantyDetails').value = j.warranty.details || '';
     $('confirm').style.display = 'block';
     $('confirm').scrollIntoView({behavior: 'smooth'});
   } catch (e) {
@@ -136,15 +182,17 @@ async function extract() {
 
 async function createItem() {
   const btn = $('createBtn');
-  if (!$('f_name').value.trim()) { $('confErr').textContent = 'Name is required.'; return; }
+  if (!$('c_name').value.trim()) { $('confErr').textContent = 'Name is required.'; return; }
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Creating…';
   $('confErr').textContent = '';
   const fd = new FormData();
-  for (const k of ['name','manufacturer','modelNumber','serialNumber','purchaseFrom','purchaseDate','purchasePrice'])
-    fd.append(k, $('f_' + k).value.trim());
-  fd.append('locationId', $('f_location').value);
-  if (files[2]) fd.append('receipt', files[2]);   // receipt photo attaches to the item
+  for (const k of ['name','quantity','manufacturer','modelNumber','serialNumber','purchaseFrom',
+                   'purchaseDate','purchasePrice','warrantyMonths','warrantyClaimsUrl','warrantyDetails'])
+    fd.append(k, $('c_' + k).value.trim());
+  fd.append('locationId', $('c_location').value);
+  for (const s of ['receipt', 'product', 'warranty'])   // photos attach to the item
+    if (files[s]) fd.append(s, files[s]);
   try {
     const r = await fetch('/api/create', {method: 'POST', body: fd});
     const j = await r.json();

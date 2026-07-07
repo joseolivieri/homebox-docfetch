@@ -32,6 +32,11 @@ type IntakeExtraction struct {
 		PurchasePrice float64 `json:"purchasePrice"`
 		NameHint      string  `json:"nameHint"`
 	} `json:"receipt"`
+	Warranty struct {
+		DurationMonths int    `json:"durationMonths"` // 0 = not stated
+		ClaimsURL      string `json:"claimsUrl"`
+		Details        string `json:"details"` // verbatim-ish terms text
+	} `json:"warranty"`
 	Name       string             `json:"name"` // best canonical product name
 	Confidence map[string]float64 `json:"confidence"`
 }
@@ -67,13 +72,17 @@ func (c *Client) ExtractIntake(ctx context.Context, visionModel string, images [
 		return nil, fmt.Errorf("no vision model configured")
 	}
 
-	sys := "You read photos of product model/serial stickers and purchase receipts. Classify each " +
-		"image yourself. Extract only what is visible; empty string/0 for anything not present. " +
-		"modelNumber is the manufacturer's model/part number, never a marketing phrase. " +
-		"purchaseDate must be YYYY-MM-DD. name is the best canonical product name you can infer. " +
+	sys := "You read photos related to a product: model/serial stickers, purchase receipts, and " +
+		"warranty terms (box panel or webpage). Classify each image yourself. Extract only what is " +
+		"visible; empty string/0 for anything not present. modelNumber is the manufacturer's " +
+		"model/part number, never a marketing phrase. purchaseDate must be YYYY-MM-DD. " +
+		"warranty.durationMonths is the stated warranty length in months (e.g. '60 day' = 2, '1 year' = 12); " +
+		"warranty.claimsUrl is a claims/registration/support URL if shown; warranty.details is a short " +
+		"summary of the stated terms. name is the best canonical product name you can infer. " +
 		`Respond ONLY with JSON: {"sticker":{"manufacturer":"","modelNumber":"","serialNumber":"","productType":""},` +
 		`"receipt":{"purchaseFrom":"","purchaseDate":"","purchasePrice":0,"nameHint":""},` +
-		`"name":"","confidence":{"manufacturer":0,"modelNumber":0,"serialNumber":0,"name":0,"purchase":0}}. No prose.`
+		`"warranty":{"durationMonths":0,"claimsUrl":"","details":""},` +
+		`"name":"","confidence":{"manufacturer":0,"modelNumber":0,"serialNumber":0,"name":0,"purchase":0,"warranty":0}}. No prose.`
 
 	parts := []mmPart{{Type: "text", Text: "Extract product identity and purchase info from these photos."}}
 	for _, img := range images {
@@ -89,7 +98,7 @@ func (c *Client) ExtractIntake(ctx context.Context, visionModel string, images [
 
 	body, _ := json.Marshal(mmReq{
 		Model:       visionModel,
-		MaxTokens:   300,
+		MaxTokens:   400,
 		Temperature: 0,
 		Messages: []mmMessage{
 			{Role: "system", Content: sys},

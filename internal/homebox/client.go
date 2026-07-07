@@ -151,6 +151,21 @@ func (c *Client) DeleteEntity(ctx context.Context, id string) error {
 	return c.json(ctx, http.MethodDelete, "/entities/"+id, nil, nil)
 }
 
+// TreeNode is one node of /v1/entities/tree (locations + optionally items).
+type TreeNode struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Type     string     `json:"type"` // "location" | "item"
+	Children []TreeNode `json:"children"`
+}
+
+// Tree returns the entity hierarchy. The flat /entities list only returns
+// Item-type entities (verified live) — locations are ONLY visible here.
+func (c *Client) Tree(ctx context.Context) ([]TreeNode, error) {
+	var out []TreeNode
+	return out, c.json(ctx, http.MethodGet, "/entities/tree", nil, &out)
+}
+
 // --- Attachments ---
 
 // UploadAttachment posts a file as multipart form data. attType is one of the

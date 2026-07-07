@@ -16,6 +16,7 @@ type WarrantyEstimate struct {
 	Months     int     `json:"months"`
 	Confidence float64 `json:"confidence"`
 	Source     string  `json:"source"`
+	ClaimsURL  string  `json:"claimsUrl"`
 }
 
 // EstimateWarranty infers the standard manufacturer warranty term for a product
@@ -31,8 +32,9 @@ func (c *Client) EstimateWarranty(ctx context.Context, itemDesc string, cands []
 	}
 	sys := "You determine the STANDARD manufacturer warranty term for a product from search snippets. " +
 		"Only report a term the snippets actually state for this product or its manufacturer's standard " +
-		"policy; months=0 if unclear. source is the supporting URL. " +
-		`Respond ONLY with JSON: {"months":0,"confidence":0.0,"source":""}. No prose.`
+		"policy; months=0 if unclear. source is the supporting URL. claimsUrl is the manufacturer's " +
+		"warranty-claims/registration/support page if one appears in the results, else empty. " +
+		`Respond ONLY with JSON: {"months":0,"confidence":0.0,"source":"","claimsUrl":""}. No prose.`
 
 	reqBody, _ := json.Marshal(chatReq{
 		Model:       c.rerankModel,
