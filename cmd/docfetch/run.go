@@ -46,6 +46,7 @@ func build(cfg *config.Config) (*deps, error) {
 	eng := discovery.NewEngine(discovery.Options{
 		SearxngURL:      cur.Discovery.SearxngURL,
 		Language:        cur.Discovery.Language,
+		Region:          cur.Discovery.Region,
 		Pipeline:        cur.Discovery.Pipeline,
 		StopConfidence:  cur.Docs.AutoAttachThreshold,
 		Queries:         cur.Discovery.Queries,
@@ -71,6 +72,7 @@ func build(cfg *config.Config) (*deps, error) {
 		HomeboxURL:          cfg.Homebox.URL,
 		PortalURL:           strings.TrimRight(cfg.Intake.PublicURL, "/"),
 		SignKey:             cfg.Homebox.Token,
+		DocsEnabled:         cfg.DocsEnabled(),
 		PhotoEnabled:        cur.Photo.Enabled,
 		PhotoMinConfidence:  cur.Photo.MinConfidence,
 		WarrantyEnabled:     cur.Warranty.Enabled,

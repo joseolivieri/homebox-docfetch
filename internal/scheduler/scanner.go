@@ -59,7 +59,8 @@ type Config struct {
 	PortalURL           string // public portal base; enables ntfy approve buttons
 	SignKey             string // HMAC key for approve links (the Homebox token)
 
-	// Curation extras (photo/warranty moved here from the portal).
+	// Per-provider toggles (docs/photo/warranty; enrich toggles via SetEnricher).
+	DocsEnabled        bool
 	PhotoEnabled       bool
 	PhotoMinConfidence float64
 	WarrantyEnabled    bool
@@ -227,6 +228,12 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 	if s.cfg.SkipIfManualExists && hasManual(detail) {
 		log.Printf("skip %q — manual already present", detail.Name)
 		base.Status = store.StatusAttached
+		return s.store.Upsert(ctx, base)
+	}
+
+	// Docs provider disabled: record the (undocumented) state and move on.
+	if !s.cfg.DocsEnabled {
+		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}
 

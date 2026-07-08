@@ -23,7 +23,7 @@ import (
 
 // CurationSearch is the web-search surface curation needs (SearXNG-backed).
 type CurationSearch interface {
-	ProductImageCandidates(ctx context.Context, subject string, max int, maxBytes int64) ([]discovery.ImageCandidate, error)
+	ProductImageCandidates(ctx context.Context, subject, brand string, max int, maxBytes int64) ([]discovery.ImageCandidate, error)
 	Search(ctx context.Context, query string) ([]enrich.SearchResult, error)
 }
 
@@ -85,7 +85,7 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 	if subject == "" {
 		return
 	}
-	cands, err := s.curSearch.ProductImageCandidates(ctx, subject, 5, 10<<20)
+	cands, err := s.curSearch.ProductImageCandidates(ctx, subject, detail.Manufacturer, 5, 10<<20)
 	if err != nil {
 		log.Printf("photo %s: image search: %v", detail.ID, err)
 		return

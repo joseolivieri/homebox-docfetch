@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -99,6 +100,7 @@ type Schedule struct {
 type Discovery struct {
 	SearxngURL      string        `yaml:"searxng_url"`
 	Language        string        `yaml:"language"` // SearXNG language code (e.g. "en", "en-US"); biases manual/warranty/photo sources
+	Region          string        `yaml:"region"`   // ISO country code (e.g. "us"); other-market URLs deprioritized in docs/photos/warranty. "" = off
 	Pipeline        []string      `yaml:"pipeline"` // source priority: brand-site, web-pdf, web-html
 	Queries         []string      `yaml:"queries"`
 	MaxCandidates   int           `yaml:"max_candidates"`
@@ -108,12 +110,19 @@ type Discovery struct {
 	BackoffBase     time.Duration `yaml:"backoff_base"`
 }
 
-// Docs configures manual fetching/attaching.
+// Docs configures manual fetching/attaching. Enabled is a pointer so that an
+// absent key means true — docs are the core provider.
 type Docs struct {
+	Enabled             *bool   `yaml:"enabled"`
 	DocType             string  `yaml:"doc_type"`
 	SkipIfManualExists  bool    `yaml:"skip_if_manual_exists"`
 	AutoAttachThreshold float64 `yaml:"auto_attach_threshold"`
 	RequireModelMatch   bool    `yaml:"require_model_match"`
+}
+
+// DocsEnabled resolves the docs provider toggle (default true).
+func (c *Config) DocsEnabled() bool {
+	return c.Curation.Docs.Enabled == nil || *c.Curation.Docs.Enabled
 }
 
 // Enrich configures metadata auto-completion. Fill-only by design.
@@ -183,6 +192,10 @@ func (c *Config) defaults() {
 	}
 	if c.Curation.Discovery.Language == "" {
 		c.Curation.Discovery.Language = "en"
+	}
+	if c.Curation.Discovery.Region == "" && strings.HasPrefix(c.Curation.Discovery.Language, "en") {
+		// English defaults to the US market; non-English deployments must opt in.
+		c.Curation.Discovery.Region = "us"
 	}
 	if c.Curation.Photo.MinConfidence == 0 {
 		c.Curation.Photo.MinConfidence = 0.7

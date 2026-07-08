@@ -63,9 +63,11 @@ type ImageCandidate struct {
 
 // ProductImageCandidates gathers up to max downloadable image candidates for
 // the subject: junk hosts skipped, loose topical token match, size sanity.
-// Rules only prefilter here — the caller ranks with the vision model and
-// applies its confidence threshold (no junk attach on a weak field).
-func (e *Engine) ProductImageCandidates(ctx context.Context, subject string, max int, maxBytes int64) ([]ImageCandidate, error) {
+// brand (the manufacturer name, may be empty) resolves to the official domain
+// so the maker's own images outrank reseller SEO sites. Rules only prefilter
+// here — the caller ranks with the vision model and applies its confidence
+// threshold (no junk attach on a weak field).
+func (e *Engine) ProductImageCandidates(ctx context.Context, subject, brand string, max int, maxBytes int64) ([]ImageCandidate, error) {
 	results, err := e.SearchImages(ctx, subject)
 	if err != nil {
 		return nil, err
@@ -81,9 +83,27 @@ func (e *Engine) ProductImageCandidates(ctx context.Context, subject string, max
 			return nil, err
 		}
 	}
+	// Three tiers: official brand-domain images, then region/global hosts,
+	// then other-country-market sources — lower tiers only fill leftover slots.
+	brandDomain := ""
+	if brand != "" {
+		brandDomain = e.brandDomain(ctx, brand)
+	}
+	var official, preferred, deferred []ImageResult
+	for _, r := range results {
+		switch {
+		case brandDomain != "" && (hostMatches(r.ImgSrc, brandDomain) || hostMatches(r.URL, brandDomain)):
+			official = append(official, r)
+		case isCountrySpecificURL(r.ImgSrc, e.opt.Region) || isCountrySpecificURL(r.URL, e.opt.Region):
+			deferred = append(deferred, r)
+		default:
+			preferred = append(preferred, r)
+		}
+	}
+	ordered := append(official, append(preferred, deferred...)...)
 	tokens := subjectTokens(subject)
 	var out []ImageCandidate
-	for _, r := range results {
+	for _, r := range ordered {
 		if len(out) >= max {
 			break
 		}
@@ -128,9 +148,19 @@ func (e *Engine) downloadImage(ctx context.Context, u string, maxBytes int64) ([
 	return b, ct, nil
 }
 
+// hostMatches reports whether the URL's host is the domain or a subdomain.
+func hostMatches(raw, domain string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	h := strings.ToLower(u.Host)
+	return h == domain || strings.HasSuffix(h, "."+domain)
+}
+
 func isJunkImageHost(u string) bool {
 	l := strings.ToLower(u)
-	for _, bad := range []string{"pinterest.", "ebay", "auctions.", "yimg.jp", "mercari", "aliexpress", "alibaba", "etsy.", "reddit", "fbcdn", "instagram"} {
+	for _, bad := range []string{"pinterest.", "pinimg.", "ebay", "auctions.", "yimg.jp", "mercari", "aliexpress", "alibaba", "etsy.", "reddit", "fbcdn", "instagram"} {
 		if strings.Contains(l, bad) {
 			return true
 		}

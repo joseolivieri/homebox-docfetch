@@ -79,6 +79,7 @@ type Reranker interface {
 type Options struct {
 	SearxngURL      string
 	Language        string   // SearXNG language code; biases all searches
+	Region          string   // ISO country code (e.g. "us"); other-market URLs are deprioritized everywhere. "" disables
 	Pipeline        []string // source stages in priority order: brand-site, web-pdf, web-html
 	StopConfidence  float64  // stop at the first stage whose pick reaches this
 	Queries         []string
@@ -278,9 +279,10 @@ func (e *Engine) scoreCandidates(ctx context.Context, it Item, cands []Candidate
 		if c.Official {
 			c.Score += 2
 		}
-		if strings.HasPrefix(strings.ToLower(e.opt.Language), "en") && isCountrySpecificHost(c.URL) {
-			// Bias toward US/global sources — country-market sites can carry
-			// different warranty terms and non-English documents.
+		if isCountrySpecificURL(c.URL, e.opt.Region) {
+			// Bias toward the configured region / global sources —
+			// country-market sites can carry different warranty terms and
+			// non-target-language documents.
 			c.Score--
 		}
 	}
@@ -316,21 +318,61 @@ func (e *Engine) head(ctx context.Context, url string) (contentType string, size
 	return resp.Header.Get("Content-Type"), resp.ContentLength
 }
 
-// isCountrySpecificHost flags hosts that target a non-US country market
-// (country-code TLDs or country-named domains like ankerjapan.com).
-func isCountrySpecificHost(raw string) bool {
+// countryCodes are market codes recognized in ccTLDs, path segments, and
+// locale pairs. Deliberately excludes ambiguous English-word codes ("in" and
+// "id" stay host-only via the ccTLD check below, not path matching).
+var countryCodes = map[string]bool{
+	"uk": true, "gb": true, "au": true, "nz": true, "ca": true, "us": true,
+	"jp": true, "cn": true, "kr": true, "tw": true, "hk": true, "sg": true,
+	"de": true, "fr": true, "it": true, "es": true, "nl": true, "pl": true,
+	"se": true, "no": true, "dk": true, "fi": true, "at": true, "ch": true,
+	"be": true, "pt": true, "gr": true, "cz": true, "ro": true, "hu": true,
+	"ru": true, "tr": true, "br": true, "mx": true, "vn": true, "th": true,
+	"my": true, "ae": true, "sa": true, "za": true, "ie": true,
+}
+
+var countryWords = []string{"japan", "china", "korea", "europe", "deutschland", "vietnam", "france", "italia", "espana", "brasil", "australia"}
+
+// isCountrySpecificURL flags URLs that target a country market OTHER than the
+// configured region — via ccTLD (anker.jp), country-named host
+// (ankervietnam.vn), or a market path/locale segment (anker.com/nz/…,
+// support.x.com/en-nz/…). region "" disables the check.
+func isCountrySpecificURL(raw, region string) bool {
+	if region == "" {
+		return false
+	}
+	region = strings.ToLower(region)
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return false
 	}
 	h := strings.ToLower(u.Host)
-	for _, tld := range []string{".jp", ".cn", ".kr", ".tw", ".de", ".fr", ".it", ".es", ".ru", ".br", ".mx", ".nl", ".pl", ".se", ".tr", ".in"} {
-		if strings.HasSuffix(h, tld) {
+	// ccTLD (last label). Multi-label public suffixes like .co.uk resolve to "uk".
+	labels := strings.Split(h, ".")
+	if last := labels[len(labels)-1]; countryCodes[last] && last != region {
+		return true
+	}
+	if len(labels) >= 2 { // .co.uk / .com.au style
+		if last := labels[len(labels)-1]; (last != region) && len(labels) >= 3 && (labels[len(labels)-2] == "co" || labels[len(labels)-2] == "com") && countryCodes[last] {
 			return true
 		}
 	}
-	for _, w := range []string{"japan", "china", "korea", "europe", "deutschland"} {
+	for _, w := range countryWords {
 		if strings.Contains(h, w) {
+			return true
+		}
+	}
+	// Market path segments: /nz/, /en-nz/, /de-de/ in the first two components.
+	segs := strings.Split(strings.Trim(strings.ToLower(u.Path), "/"), "/")
+	for i, s := range segs {
+		if i >= 2 {
+			break
+		}
+		cc := s
+		if p := strings.SplitN(s, "-", 2); len(p) == 2 && len(p[1]) == 2 {
+			cc = p[1] // locale pair like en-nz
+		}
+		if len(cc) == 2 && countryCodes[cc] && cc != region {
 			return true
 		}
 	}

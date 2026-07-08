@@ -86,6 +86,7 @@ func newTestScanner(t *testing.T, api *fakeAPI, disc *fakeDisc, nt *fakeNtfy) (*
 		t.Fatal(err)
 	}
 	sc := NewScanner(api, disc, nt, st, Config{
+		DocsEnabled:         true,
 		AutoAttachThreshold: 0.7,
 		SkipIfManualExists:  true,
 		MaxPDFBytes:         10_000_000,
