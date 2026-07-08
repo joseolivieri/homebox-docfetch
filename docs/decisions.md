@@ -48,6 +48,39 @@ Format: decisions are immutable once logged (append a new entry to reverse one).
 
 ## Deferred / future (not in scope now)
 
+- **Provider standardization (agreed 2026-07-08 — do as the FIRST step of the next new
+  curation source).** Formalize the four curation steps (docs/enrich/photo/warranty) behind a
+  common interface, enabling drop-in sources (RecallProvider, SpecificationProvider,
+  EnergyGuideProvider…). NOT the flat `Enrich(ctx, item) (*Result, error)` shape — there is no
+  shared result type, and the write side is where all safety lives (fill-only, corroboration,
+  full-merge PUT, single-writer, ledger). Agreed shape — **providers propose, the worker
+  disposes**:
+
+  ```go
+  type Provider interface {
+      Name() string                                        // ledger doc_class
+      Provide(ctx context.Context, it Item) ([]Proposal, error)
+  }
+  // Proposal: {kind: field|attachment|tag|note, target, value/bytes,
+  //            confidence, source URL, official bool}
+  ```
+
+  Worker loop: run enabled providers → apply gates (thresholds, fill-only, dedupe, rejected-URL
+  filter) → ONE merged PUT + uploads → one ledger row per proposal → notes lines. Learning loop
+  becomes uniform (every proposal labelable; domain priors per provider). Port the existing four
+  onto the interface in the same change — mechanical once the worker exists. Per-provider
+  `enabled` config flags already exist (docs/enrich/photo/warranty).
+- **Classic-Homebox API adapter (general-use blocker).** The `internal/homebox` client speaks
+  only this deployment's entity-model fork (`/entities`, tags, parentId). Upstream Homebox uses
+  `/items`, `/labels`, `locationId`. General-use release needs an API-flavor adapter interface
+  with two implementations, plus feature-detection or a config switch. Decide fork-only vs
+  upstream support before investing.
+- **Learning phases B–D** (ledger from D17 is the dataset): B = golden set + `docfetch eval`
+  replay subcommand (regression-test prompt/pipeline/threshold changes against confirmed
+  item→doc pairs); C = learned domain priors (Laplace-smoothed accept/reject rate per domain
+  from labels, seeds today's hard blocklists) + persisted brand-domain / per-manufacturer
+  model-number-pattern memory; D = auto-calibrated confidence thresholds (observed precision
+  per confidence band, target ~95%) + richer digest metrics.
 - **Doc classes (manual + quickstart + datasheet).** Today the pipeline attaches exactly ONE doc
   per item (single Best candidate; `skip_if_manual_exists` is global, so a quick-start guide never
   attaches once a manual exists). Deferred design (agreed 2026-07-06): classify candidates into
