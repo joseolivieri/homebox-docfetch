@@ -1,9 +1,14 @@
 # homebox-docfetch
 
-Standalone scheduled sidecar that enriches a [Homebox](https://homebox.software) inventory
-through its REST API — **no UI integration, no DB access**. It scans the collection, auto-fetches
-user manuals / support docs for items, and attaches them. Phase 2 adds a phone-friendly
-photo-intake portal that creates items from a model-label and/or receipt photo.
+Standalone sidecar that enriches a [Homebox](https://homebox.software) inventory
+through its REST API — **no UI integration, no DB access**. Two discrete stages (D20):
+
+- **Intake** (`docfetch portal`, `internal/portal`) — phone photo-intake PWA. Vision-model
+  calls only; no web searching (offline-LLM-ready).
+- **Curation** (`docfetch scheduler`, `internal/scheduler`) — recurring scanner owning ALL
+  web egress: metadata enrichment, manual fetching, official photos, warranty, tagging.
+
+The stages share nothing but Homebox itself; the entity notes block is the bus between them.
 
 This directory holds the service source, its container/compose, and its design docs. The Ansible
 deployment role lives separately at `ansible/roles/docfetch/` (follows the `homebox` role pattern).

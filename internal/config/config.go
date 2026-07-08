@@ -3,6 +3,15 @@
 // The file is YAML. Any value of the form ${VAR} is replaced with the
 // environment variable VAR before parsing, which is how secrets (the Homebox
 // token, the OpenRouter key) are injected without ever living in the file.
+//
+// The schema mirrors the two pipeline stages (docs/how-it-works.md):
+//
+//   - intake:   the phone portal. Vision-model calls ONLY — no web searching,
+//     so the LLM can eventually move local/offline.
+//   - curation: the recurring scanner. ALL web egress lives here — metadata
+//     enrichment, doc discovery, official photos, warranty lookups, tagging.
+//
+// Everything else (homebox, llm, tags, notify, notes, state_db) is shared.
 package config
 
 import (
@@ -14,49 +23,70 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the full property-file schema (see docs/spec.md §5). Sections that
-// are not yet consumed (portal, vision) are parsed so the example file is valid
-// and so Phase 2 needs no loader changes.
+// Config is the full property-file schema (see docs/spec.md §5).
 type Config struct {
-	Homebox    Homebox    `yaml:"homebox"`
-	Schedule   Schedule   `yaml:"schedule"`
-	Discovery  Discovery  `yaml:"discovery"`
-	LLM        LLM        `yaml:"llm"`
-	Confidence Confidence `yaml:"confidence"`
-	Attach     Attach     `yaml:"attach"`
-	Intake     Intake     `yaml:"intake"`
-	Enrich     Enrich     `yaml:"enrich"`
-	Reconcile  Reconcile  `yaml:"reconcile"`
-	Notify     Notify     `yaml:"notify"`
-	Portal     Portal     `yaml:"portal"`
-	Vision     Vision     `yaml:"vision"`
-	Notes      Notes      `yaml:"notes"`
-	StateDB    string     `yaml:"state_db"`
-}
-
-// Notes tunes the machine-written log block in each entity's notes field.
-type Notes struct {
-	// AuditLog opt-in: log a terse line for EVERY derived write (intake photos,
-	// official photo, warranty, metadata, docs) with confidence scores. Off =
-	// only doc attach/link events are logged.
-	AuditLog bool `yaml:"audit_log"`
-}
-
-// Enrich configures metadata auto-completion (Phase 1.5). Fill-only by design.
-type Enrich struct {
-	Enabled            bool     `yaml:"enabled"`
-	FillOnly           bool     `yaml:"fill_only"`
-	AutoWriteThreshold float64  `yaml:"auto_write_threshold"`
-	MinAgreeingSources int      `yaml:"min_agreeing_sources"`
-	BackCheck          bool     `yaml:"back_check"`
-	Fields             []string `yaml:"fields"`
-	ProvenanceNote     bool     `yaml:"provenance_note"`
+	Homebox  Homebox  `yaml:"homebox"`
+	LLM      LLM      `yaml:"llm"`
+	Tags     Tags     `yaml:"tags"`
+	Notify   Notify   `yaml:"notify"`
+	Notes    Notes    `yaml:"notes"`
+	Intake   Intake   `yaml:"intake"`
+	Curation Curation `yaml:"curation"`
+	StateDB  string   `yaml:"state_db"`
 }
 
 type Homebox struct {
 	URL      string `yaml:"url"`
 	Token    string `yaml:"token"`
 	PageSize int    `yaml:"page_size"`
+}
+
+type LLM struct {
+	BaseURL         string `yaml:"base_url"`
+	APIKey          string `yaml:"api_key"`
+	RerankModel     string `yaml:"rerank_model"`
+	VisionModel     string `yaml:"vision_model"`
+	MaxSnippetChars int    `yaml:"max_snippet_chars"`
+}
+
+// Tags are the triage/provenance markers (this fork's "labels"), shared by
+// both stages.
+type Tags struct {
+	Unverified string `yaml:"unverified"`
+	Provenance string `yaml:"provenance"`
+}
+
+type Notify struct {
+	NtfyURL   string `yaml:"ntfy_url"`
+	NtfyTopic string `yaml:"ntfy_topic"`
+	NtfyToken string `yaml:"ntfy_token"` // optional bearer for restricted publish
+}
+
+// Notes tunes the machine-written log block in each entity's notes field.
+type Notes struct {
+	// AuditLog opt-in: log a terse line for EVERY derived write (intake photos,
+	// official photo, warranty, metadata) with confidence scores. Off = only
+	// doc attach/link events are logged.
+	AuditLog bool `yaml:"audit_log"`
+}
+
+// Intake — stage 1, the phone portal. Vision extraction + item creation only.
+type Intake struct {
+	Listen             string   `yaml:"listen"`
+	PublicURL          string   `yaml:"public_url"` // e.g. https://docfetch.ingress-1...; target of ntfy action buttons
+	LocationEntityType string   `yaml:"location_entity_type"`
+	Photos             []string `yaml:"photos"` // intake photo slots (documentation; UI is fixed)
+}
+
+// Curation — stage 2, the recurring scanner. All web searching happens here.
+type Curation struct {
+	Schedule  Schedule  `yaml:"schedule"`
+	Discovery Discovery `yaml:"discovery"`
+	Docs      Docs      `yaml:"docs"`
+	Enrich    Enrich    `yaml:"enrich"`
+	Photo     Photo     `yaml:"photo"`
+	Warranty  Warranty  `yaml:"warranty"`
+	Reconcile Reconcile `yaml:"reconcile"`
 }
 
 type Schedule struct {
@@ -78,51 +108,38 @@ type Discovery struct {
 	BackoffBase     time.Duration `yaml:"backoff_base"`
 }
 
-type LLM struct {
-	BaseURL         string `yaml:"base_url"`
-	APIKey          string `yaml:"api_key"`
-	RerankModel     string `yaml:"rerank_model"`
-	VisionModel     string `yaml:"vision_model"`
-	MaxSnippetChars int    `yaml:"max_snippet_chars"`
-}
-
-type Confidence struct {
+// Docs configures manual fetching/attaching.
+type Docs struct {
+	DocType             string  `yaml:"doc_type"`
+	SkipIfManualExists  bool    `yaml:"skip_if_manual_exists"`
 	AutoAttachThreshold float64 `yaml:"auto_attach_threshold"`
 	RequireModelMatch   bool    `yaml:"require_model_match"`
 }
 
-type Attach struct {
-	DocType            string `yaml:"doc_type"`
-	SkipIfManualExists bool   `yaml:"skip_if_manual_exists"`
+// Enrich configures metadata auto-completion. Fill-only by design.
+type Enrich struct {
+	Enabled            bool     `yaml:"enabled"`
+	FillOnly           bool     `yaml:"fill_only"`
+	AutoWriteThreshold float64  `yaml:"auto_write_threshold"`
+	MinAgreeingSources int      `yaml:"min_agreeing_sources"`
+	BackCheck          bool     `yaml:"back_check"`
+	Fields             []string `yaml:"fields"`
+	ProvenanceNote     bool     `yaml:"provenance_note"`
 }
 
-type Intake struct {
-	UnverifiedTag string `yaml:"unverified_tag"`
-	ProvenanceTag string `yaml:"provenance_tag"`
+// Photo configures official-product-photo fetching (curation stage).
+type Photo struct {
+	Enabled       bool    `yaml:"enabled"`
+	MinConfidence float64 `yaml:"min_confidence"` // below the bar, NO photo attaches; 0 -> 0.7
+}
+
+// Warranty configures warranty estimation (curation stage).
+type Warranty struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type Reconcile struct {
 	DigestSchedule string `yaml:"digest_schedule"`
-}
-
-type Notify struct {
-	NtfyURL   string `yaml:"ntfy_url"`
-	NtfyTopic string `yaml:"ntfy_topic"`
-	NtfyToken string `yaml:"ntfy_token"` // optional bearer for restricted publish
-}
-
-type Portal struct {
-	Listen             string   `yaml:"listen"`
-	LocationEntityType string   `yaml:"location_entity_type"`
-	DefaultLocation    string   `yaml:"default_location"`
-	IntakePhotos       []string `yaml:"intake_photos"`
-	WarrantyEstimate   bool     `yaml:"warranty_estimate"`
-	PhotoMinConfidence float64  `yaml:"photo_min_confidence"` // official-photo gate; 0 -> default 0.7
-	PublicURL          string   `yaml:"public_url"`           // e.g. https://docfetch.ingress-1...; enables ntfy approve buttons
-}
-
-type Vision struct {
-	// reserved for Phase 2; vision model id lives under llm.vision_model
 }
 
 var envRef = regexp.MustCompile(`\$\{(\w+)\}`)
@@ -152,8 +169,8 @@ func (c *Config) defaults() {
 	if c.Homebox.PageSize == 0 {
 		c.Homebox.PageSize = 100
 	}
-	if c.Discovery.MaxCandidates == 0 {
-		c.Discovery.MaxCandidates = 8
+	if c.Curation.Discovery.MaxCandidates == 0 {
+		c.Curation.Discovery.MaxCandidates = 8
 	}
 	if c.LLM.MaxSnippetChars == 0 {
 		c.LLM.MaxSnippetChars = 150
@@ -161,11 +178,17 @@ func (c *Config) defaults() {
 	if c.LLM.BaseURL == "" {
 		c.LLM.BaseURL = "https://openrouter.ai/api/v1"
 	}
-	if c.Attach.DocType == "" {
-		c.Attach.DocType = "manual"
+	if c.Curation.Docs.DocType == "" {
+		c.Curation.Docs.DocType = "manual"
 	}
-	if c.Discovery.Language == "" {
-		c.Discovery.Language = "en"
+	if c.Curation.Discovery.Language == "" {
+		c.Curation.Discovery.Language = "en"
+	}
+	if c.Curation.Photo.MinConfidence == 0 {
+		c.Curation.Photo.MinConfidence = 0.7
+	}
+	if c.Intake.Listen == "" {
+		c.Intake.Listen = ":8099"
 	}
 	if c.StateDB == "" {
 		c.StateDB = "/data/docfetch.db"
@@ -175,10 +198,10 @@ func (c *Config) defaults() {
 func (c *Config) validate() error {
 	var missing []string
 	req := map[string]string{
-		"homebox.url":           c.Homebox.URL,
-		"homebox.token":         c.Homebox.Token,
-		"intake.unverified_tag": c.Intake.UnverifiedTag,
-		"intake.provenance_tag": c.Intake.ProvenanceTag,
+		"homebox.url":     c.Homebox.URL,
+		"homebox.token":   c.Homebox.Token,
+		"tags.unverified": c.Tags.Unverified,
+		"tags.provenance": c.Tags.Provenance,
 	}
 	for k, v := range req {
 		if v == "" {
@@ -188,8 +211,8 @@ func (c *Config) validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("config: missing required values: %v", missing)
 	}
-	if c.Confidence.AutoAttachThreshold < 0 || c.Confidence.AutoAttachThreshold > 1 {
-		return fmt.Errorf("config: confidence.auto_attach_threshold must be within [0,1], got %v", c.Confidence.AutoAttachThreshold)
+	if t := c.Curation.Docs.AutoAttachThreshold; t < 0 || t > 1 {
+		return fmt.Errorf("config: curation.docs.auto_attach_threshold must be within [0,1], got %v", t)
 	}
 	return nil
 }

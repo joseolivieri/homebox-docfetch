@@ -10,12 +10,21 @@ user manual, complete metadata, a product photo, and warranty info — without
 anyone doing that work by hand.** It talks to Homebox only through the same
 API the web app uses; it never touches the database directly.
 
-It has two faces:
+It has two stages, with a deliberate division of labor:
 
-- **The scanner** — a background job that wakes up regularly, looks at every
-  item, and fills in whatever is missing.
-- **The intake portal** — a phone-friendly web page (private, Tailscale-only)
-  for adding a new item by taking photos of it.
+- **Intake** (the portal) — a phone-friendly web page (private, Tailscale-only)
+  for adding a new item by taking photos of it. Its only outside call is the
+  AI vision model that reads your photos — it never searches or downloads
+  anything from the web. That keeps it simple, fast, and ready to run fully
+  offline once a local vision model replaces the cloud one.
+- **Curation** (the scanner) — a background job that wakes up regularly, looks
+  at every item, and fills in whatever is missing. *All* web activity lives
+  here: metadata lookups, manual hunting, official product photos, warranty
+  research.
+
+The two never talk to each other directly — the inventory itself is the
+hand-off. Intake creates the item; the scanner notices the change within about
+30 seconds and takes over.
 
 ---
 
@@ -36,21 +45,20 @@ duration. You get a confirmation screen where you can correct anything, pick a
 quantity, and optionally choose which room the item lives in. Tap create, done
 — usually under a minute in total.
 
-Behind the scenes the portal then:
+Behind the scenes the portal then creates the item in Homebox with everything
+you confirmed and attaches all the photos you took (receipt as a receipt,
+warranty as a warranty, your product photo as the main image). That's it —
+intake is done. Everything that needs the web happens in the curation stage,
+starting seconds later:
 
-1. Creates the item in Homebox with everything you confirmed.
-2. Attaches all the photos you took (receipt as a receipt, warranty as a
-   warranty, your product photo as the main image).
-3. Searches the web for an **official** product photo, has the vision model
-   compare candidates against *your* photo of the item, and attaches the best
-   one — but only if it's confident enough. A bad photo is worse than none.
-4. Estimates the **warranty**: it searches for the manufacturer's standard
-   warranty terms. Only when it finds a solid, sourced answer does it set a
-   hard expiry date; a shaky answer becomes a note instead of a date.
-
-The manual and remaining metadata are *not* fetched here — that's the
-scanner's job (one writer, no duplicate attachments). The scanner notices the
-new item within about 30 seconds and takes over.
+- **Official product photo.** The scanner searches the web for one, has the
+  vision model compare candidates against *your* photo of the item (fetched
+  back from the inventory as the reference), and attaches the best one — but
+  only if it's confident enough. A bad photo is worse than none.
+- **Warranty estimate.** It searches for the manufacturer's standard warranty
+  terms. Only when it finds a solid, sourced answer does it set a hard expiry
+  date; a shaky answer becomes a note instead of a date.
+- **Metadata and the manual** — the next two sections.
 
 ## 2. Filling in metadata (enrichment)
 
@@ -136,12 +144,14 @@ labeled links, never raw. (The extra detail lines are the opt-in
 Below the confidence bar, docfetch never guesses silently. It tags the item
 `docfetch/unverified` and sends a phone notification (ntfy) with two buttons:
 
-- **Attach** — the candidate is downloaded and attached, and its source
-  recorded, exactly as an automatic attach would be.
+- **Attach** — your approval is noted on the item, and the scanner downloads
+  and attaches that exact document within about 30 seconds (skipping its usual
+  content checks — a human said yes).
 - **Reject** — the candidate is marked wrong, permanently.
 
-Both buttons are one tap. The links are cryptographically signed, so nobody
-without the key can trigger them.
+Both buttons are one tap and work the same way: they write a small `approved`
+or `rejected` line into the item's notes, which the scanner acts on. The links
+are cryptographically signed, so nobody without the key can trigger them.
 
 ## 6. How it learns (the feedback loop)
 

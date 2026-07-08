@@ -211,3 +211,26 @@ func (c *Client) UploadAttachment(ctx context.Context, entityID, filename, attTy
 	}
 	return &out, nil
 }
+
+// DownloadAttachment fetches an attachment's bytes (verified live:
+// GET /v1/entities/{id}/attachments/{attachment_id} streams the file).
+// Returns data + content type. maxBytes caps the read (0 = 20MB default).
+func (c *Client) DownloadAttachment(ctx context.Context, entityID, attachmentID string, maxBytes int64) ([]byte, string, error) {
+	if maxBytes <= 0 {
+		maxBytes = 20 << 20
+	}
+	resp, err := c.do(ctx, http.MethodGet, "/entities/"+entityID+"/attachments/"+attachmentID, nil, "")
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, "", fmt.Errorf("download attachment: http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	if err != nil {
+		return nil, "", err
+	}
+	return data, resp.Header.Get("Content-Type"), nil
+}

@@ -29,6 +29,7 @@ type EntityAPI interface {
 	PatchEntity(ctx context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error)
 	PutEntity(ctx context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error)
 	UploadAttachment(ctx context.Context, id, filename, attType string, primary bool, r io.Reader) (*homebox.EntityOut, error)
+	DownloadAttachment(ctx context.Context, entityID, attachmentID string, maxBytes int64) ([]byte, string, error)
 	EnsureTag(ctx context.Context, name string) (string, error)
 }
 
@@ -57,6 +58,12 @@ type Config struct {
 	HomeboxURL          string
 	PortalURL           string // public portal base; enables ntfy approve buttons
 	SignKey             string // HMAC key for approve links (the Homebox token)
+
+	// Curation extras (photo/warranty moved here from the portal).
+	PhotoEnabled       bool
+	PhotoMinConfidence float64
+	WarrantyEnabled    bool
+	AuditLog           bool
 }
 
 type Scanner struct {
@@ -66,6 +73,11 @@ type Scanner struct {
 	store    *store.Store
 	cfg      Config
 	enricher Enricher // nil = enrichment disabled
+
+	// Curation extras (nil = disabled): web search + vision surfaces.
+	curSearch   CurationSearch
+	vision      Vision
+	visionModel string
 
 	unverifiedTagID string
 }
@@ -200,11 +212,29 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		base.MetaHash = store.MetaHash(detail.Manufacturer, detail.ModelNumber, detail.Name)
 	}
 
+	docErr := s.processDocs(ctx, detail, rec, base)
+
+	// Curation extras — independent of the doc outcome.
+	s.curatePhoto(ctx, detail)
+	s.curateWarranty(ctx, detail)
+	return docErr
+}
+
+// processDocs is the manual-fetch phase: approved-queue fulfilment, discovery
+// pipeline, attach/link/review/notfound. Owns the store record's doc state.
+func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, rec, base *store.Record) error {
 	// Already has a manual -> doc-fetch is done.
 	if s.cfg.SkipIfManualExists && hasManual(detail) {
 		log.Printf("skip %q — manual already present", detail.Name)
 		base.Status = store.StatusAttached
 		return s.store.Upsert(ctx, base)
+	}
+
+	// One-tap approval queued via the notes block (the portal makes no web
+	// calls — the Attach button just writes "approved [pdf](url)"). Fulfil it
+	// here: download + attach the exact URL the human approved, no discovery.
+	if approved := notes.ApprovedURLs(detail.Notes); len(approved) > 0 {
+		return s.attachApproved(ctx, detail, approved[len(approved)-1], base)
 	}
 
 	item := discovery.Item{Manufacturer: detail.Manufacturer, ModelNumber: detail.ModelNumber, Name: detail.Name}

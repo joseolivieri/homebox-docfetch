@@ -1,7 +1,15 @@
-// Package portal is the Phase-2 photo-intake web app: snap a model sticker
-// and/or receipt on a phone, confirm the extracted fields, and get a fully
-// created + enriched + documented Homebox entity. Tailscale-only exposure —
-// the tailnet is the access boundary (no auth of its own).
+// Package portal is the item-intake stage (stage 1): snap a model sticker
+// and/or receipt on a phone, confirm the extracted fields, and get the item
+// created in Homebox. Tailscale-only exposure — the tailnet is the access
+// boundary (no auth of its own).
+//
+// Boundary rule: the ONLY remote call this stage makes is the vision model
+// (photo analysis), so the LLM can eventually move local/offline. Everything
+// that searches or downloads from the web — metadata enrichment, docs,
+// official photos, warranty lookups — belongs to the curation stage (the
+// scanner), which picks a new item up within ~change_poll seconds. The ntfy
+// Attach/Reject buttons follow the same rule: they only write queued
+// approved/rejected lines into the entity's notes block for the scanner.
 package portal
 
 import (
@@ -17,10 +25,8 @@ import (
 	"time"
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/scheduler"
 )
 
 //go:embed static
@@ -31,25 +37,23 @@ const maxUploadBytes = 40 << 20 // up to 4 phone-camera photos
 type Server struct {
 	cfg *config.Config
 	hb  *homebox.Client
-	eng *discovery.Engine
 	ai  *llm.Client
-	sc  *scheduler.Scanner
 
 	unverifiedTagID string
 	provenanceTagID string
 }
 
-func New(cfg *config.Config, hb *homebox.Client, eng *discovery.Engine, ai *llm.Client, sc *scheduler.Scanner) *Server {
-	return &Server{cfg: cfg, hb: hb, eng: eng, ai: ai, sc: sc}
+func New(cfg *config.Config, hb *homebox.Client, ai *llm.Client) *Server {
+	return &Server{cfg: cfg, hb: hb, ai: ai}
 }
 
 // Run bootstraps tags and serves until ctx is done.
 func (s *Server) Run(ctx context.Context) error {
 	var err error
-	if s.unverifiedTagID, err = s.hb.EnsureTag(ctx, s.cfg.Intake.UnverifiedTag); err != nil {
+	if s.unverifiedTagID, err = s.hb.EnsureTag(ctx, s.cfg.Tags.Unverified); err != nil {
 		return fmt.Errorf("ensure unverified tag: %w", err)
 	}
-	if s.provenanceTagID, err = s.hb.EnsureTag(ctx, s.cfg.Intake.ProvenanceTag); err != nil {
+	if s.provenanceTagID, err = s.hb.EnsureTag(ctx, s.cfg.Tags.Provenance); err != nil {
 		return fmt.Errorf("ensure provenance tag: %w", err)
 	}
 
@@ -63,7 +67,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/reject", s.handleReject)
 
 	srv := &http.Server{
-		Addr:              s.cfg.Portal.Listen,
+		Addr:              s.cfg.Intake.Listen,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -73,7 +77,7 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
 	}()
-	log.Printf("portal listening on %s", s.cfg.Portal.Listen)
+	log.Printf("portal listening on %s", s.cfg.Intake.Listen)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}

@@ -42,37 +42,42 @@ func build(cfg *config.Config) (*deps, error) {
 	if cfg.LLM.APIKey != "" {
 		rr = llm.New(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.RerankModel)
 	}
+	cur := cfg.Curation
 	eng := discovery.NewEngine(discovery.Options{
-		SearxngURL:      cfg.Discovery.SearxngURL,
-		Language:        cfg.Discovery.Language,
-		Pipeline:        cfg.Discovery.Pipeline,
-		StopConfidence:  cfg.Confidence.AutoAttachThreshold,
-		Queries:         cfg.Discovery.Queries,
-		MaxCandidates:   cfg.Discovery.MaxCandidates,
-		MinPDFBytes:     cfg.Discovery.MinPDFBytes,
-		MaxPDFBytes:     cfg.Discovery.MaxPDFBytes,
+		SearxngURL:      cur.Discovery.SearxngURL,
+		Language:        cur.Discovery.Language,
+		Pipeline:        cur.Discovery.Pipeline,
+		StopConfidence:  cur.Docs.AutoAttachThreshold,
+		Queries:         cur.Discovery.Queries,
+		MaxCandidates:   cur.Discovery.MaxCandidates,
+		MinPDFBytes:     cur.Discovery.MinPDFBytes,
+		MaxPDFBytes:     cur.Discovery.MaxPDFBytes,
 		MaxSnippetChars: cfg.LLM.MaxSnippetChars,
-		RequireModel:    cfg.Confidence.RequireModelMatch,
-		RatePerMin:      cfg.Discovery.RateLimitPerMin,
+		RequireModel:    cur.Docs.RequireModelMatch,
+		RatePerMin:      cur.Discovery.RateLimitPerMin,
 	}, rr)
 
 	nt := notify.New(cfg.Notify.NtfyURL, cfg.Notify.NtfyTopic, cfg.Notify.NtfyToken)
 
 	sc := scheduler.NewScanner(hb, eng, nt, st, scheduler.Config{
 		PageSize:            cfg.Homebox.PageSize,
-		DocType:             cfg.Attach.DocType,
-		SkipIfManualExists:  cfg.Attach.SkipIfManualExists,
-		AutoAttachThreshold: cfg.Confidence.AutoAttachThreshold,
-		MaxPDFBytes:         cfg.Discovery.MaxPDFBytes,
-		FollowupAfter:       cfg.Schedule.FollowupAfter,
-		BackoffBase:         cfg.Discovery.BackoffBase,
-		UnverifiedTag:       cfg.Intake.UnverifiedTag,
+		DocType:             cur.Docs.DocType,
+		SkipIfManualExists:  cur.Docs.SkipIfManualExists,
+		AutoAttachThreshold: cur.Docs.AutoAttachThreshold,
+		MaxPDFBytes:         cur.Discovery.MaxPDFBytes,
+		FollowupAfter:       cur.Schedule.FollowupAfter,
+		BackoffBase:         cur.Discovery.BackoffBase,
+		UnverifiedTag:       cfg.Tags.Unverified,
 		HomeboxURL:          cfg.Homebox.URL,
-		PortalURL:           strings.TrimRight(cfg.Portal.PublicURL, "/"),
+		PortalURL:           strings.TrimRight(cfg.Intake.PublicURL, "/"),
 		SignKey:             cfg.Homebox.Token,
+		PhotoEnabled:        cur.Photo.Enabled,
+		PhotoMinConfidence:  cur.Photo.MinConfidence,
+		WarrantyEnabled:     cur.Warranty.Enabled,
+		AuditLog:            cfg.Notes.AuditLog,
 	})
 
-	// Metadata enrichment (Phase 1.5) needs both search and an LLM extractor.
+	// Metadata enrichment + curation extras need search plus an LLM.
 	var ai *llm.Client
 	if xr, ok := rr.(*llm.Client); ok {
 		ai = xr
@@ -80,20 +85,21 @@ func build(cfg *config.Config) (*deps, error) {
 	if ai != nil {
 		eng.SetVerifier(ai)      // content-level doc verification before attach
 		eng.SetBrandResolver(ai) // official-domain resolution for the brand-site stage
+		sc.SetCuration(eng, ai, cfg.LLM.VisionModel)
 	}
-	if cfg.Enrich.Enabled {
+	if cur.Enrich.Enabled {
 		if ai != nil {
 			sc.SetEnricher(enrich.New(enrich.Options{
 				Enabled:            true,
-				FillOnly:           cfg.Enrich.FillOnly,
-				AutoWriteThreshold: cfg.Enrich.AutoWriteThreshold,
-				MinAgreeingSources: cfg.Enrich.MinAgreeingSources,
-				BackCheck:          cfg.Enrich.BackCheck,
-				Fields:             cfg.Enrich.Fields,
+				FillOnly:           cur.Enrich.FillOnly,
+				AutoWriteThreshold: cur.Enrich.AutoWriteThreshold,
+				MinAgreeingSources: cur.Enrich.MinAgreeingSources,
+				BackCheck:          cur.Enrich.BackCheck,
+				Fields:             cur.Enrich.Fields,
 				MaxSnippetChars:    cfg.LLM.MaxSnippetChars,
 			}, eng, ai))
 		} else {
-			log.Println("enrich.enabled=true but no LLM key configured; enrichment disabled")
+			log.Println("curation.enrich.enabled=true but no LLM key configured; enrichment disabled")
 		}
 	}
 	return &deps{hb: hb, eng: eng, ai: ai, st: st, sc: sc}, nil
@@ -128,10 +134,10 @@ func runScheduler(ctx context.Context, cfgPath string) error {
 	}
 	defer d.st.Close()
 	return scheduler.Run(ctx, d.sc, scheduler.Specs{
-		ScanNew:    cfg.Schedule.ScanNew,
-		Followup:   cfg.Schedule.Followup,
-		Reconcile:  cfg.Reconcile.DigestSchedule,
-		ChangePoll: cfg.Schedule.ChangePoll,
+		ScanNew:    cfg.Curation.Schedule.ScanNew,
+		Followup:   cfg.Curation.Schedule.Followup,
+		Reconcile:  cfg.Curation.Reconcile.DigestSchedule,
+		ChangePoll: cfg.Curation.Schedule.ChangePoll,
 	})
 }
 
@@ -148,5 +154,6 @@ func runPortal(ctx context.Context, cfgPath string) error {
 	if d.ai == nil {
 		return fmt.Errorf("portal requires an LLM key (vision extraction)")
 	}
-	return portal.New(cfg, d.hb, d.eng, d.ai, d.sc).Run(ctx)
+	// Intake stage: homebox + vision only — no discovery engine, no scanner.
+	return portal.New(cfg, d.hb, d.ai).Run(ctx)
 }

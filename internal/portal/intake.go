@@ -2,7 +2,6 @@ package portal
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,13 +10,13 @@ import (
 	"time"
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 )
 
 // handleCreate commits a confirmed intake: creates the entity, PUTs metadata,
-// attaches the receipt, then runs photo + warranty + doc-fetch in the
-// background. Multipart form: confirmed fields + optional receipt photo.
+// and attaches the intake photos. Everything web-facing (official photo,
+// warranty estimate, metadata enrichment, docs) is the curation stage's job —
+// the scanner's change-poll notices the new item within ~30s and takes over.
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -129,12 +128,11 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Attach intake photos. Personal product photo becomes the primary image;
-	// the official-photo fetch below still runs and attaches alongside it. Its
-	// bytes are also retained as the vision reference for ranking official-photo
-	// candidates (reverse-image-search-ish matching).
+	// 3. Attach intake photos. The personal product photo becomes the primary
+	// image; the curation stage later fetches an official photo alongside it,
+	// using the personal one (fetched back from Homebox) as its vision
+	// reference for ranking candidates.
 	day := time.Now().Format("2006-01-02")
-	var personal *llm.IntakeImage
 	attachments := []struct {
 		field, attType, stem string
 		primary              bool
@@ -149,199 +147,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		if a.field == "product" {
-			p := img
-			personal = &p
-		}
 		fname := a.stem + extFor(img.Mime)
 		if _, err := s.hb.UploadAttachment(ctx, ent.ID, fname, a.attType, a.primary, bytes.NewReader(img.Data)); err != nil {
 			log.Printf("portal: %s attach failed for %s: %v", a.field, ent.ID, err)
 		}
 	}
 
-	// 4. Background enrichment chain (photo, warranty, docs). Detached from the
-	// request context — phone may navigate away immediately.
-	go s.postIntake(context.WithoutCancel(ctx), ent.ID, personal)
-
 	writeJSON(w, http.StatusOK, map[string]string{
 		"id":  ent.ID,
 		"url": strings.TrimRight(s.cfg.Homebox.URL, "/") + "/item/" + ent.ID,
 	})
-}
-
-// postIntake runs the slow enrichment after the entity exists: official product
-// photo (vision-ranked, thresholded), warranty estimate, then the standard
-// enrich+doc-fetch pipeline. personal, when non-nil, is the user's own photo of
-// the item and anchors the official-photo ranking.
-func (s *Server) postIntake(ctx context.Context, id string, personal *llm.IntakeImage) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	detail, err := s.hb.GetEntity(ctx, id)
-	if err != nil {
-		log.Printf("postIntake %s: get: %v", id, err)
-		return
-	}
-	subject := strings.TrimSpace(detail.Manufacturer + " " + detail.ModelNumber)
-	if strings.TrimSpace(detail.ModelNumber) == "" {
-		subject = strings.TrimSpace(detail.Manufacturer + " " + detail.Name)
-	}
-
-	// Official product photo — fetched even when a personal photo was provided
-	// at intake (both live on the entity). Candidates are vision-ranked (against
-	// the personal photo when available) and gated by photo_min_confidence:
-	// below the bar, NO photo attaches. Confidence + source recorded in notes.
-	if subject != "" {
-		s.fetchOfficialPhoto(ctx, detail, subject, personal)
-	}
-
-	// Warranty estimate — needs a purchase date anchor and the feature enabled.
-	if s.cfg.Portal.WarrantyEstimate && detail.PurchaseDate != "" && detail.WarrantyExpires == "" && !detail.LifetimeWarranty {
-		s.estimateWarranty(ctx, detail, subject)
-	}
-
-	// Docs + metadata enrichment are intentionally NOT run here: the scheduler's
-	// change-poll picks the new item up within ~30s, and having a single writer
-	// prevents the portal/scheduler race that once attached two manuals.
-}
-
-// fetchOfficialPhoto gathers image candidates, has the vision model pick the
-// best (matched against the personal reference photo when present), applies the
-// confidence threshold, attaches, and records provenance in notes.
-func (s *Server) fetchOfficialPhoto(ctx context.Context, detail *homebox.EntityOut, subject string, personal *llm.IntakeImage) {
-	cands, err := s.eng.ProductImageCandidates(ctx, subject, 5, 10<<20)
-	if err != nil {
-		log.Printf("postIntake %s: image search: %v", detail.ID, err)
-		return
-	}
-	if len(cands) == 0 {
-		log.Printf("postIntake %s: no product image candidates (skipping)", detail.ID)
-		return
-	}
-	imgs := make([]llm.IntakeImage, len(cands))
-	for i, c := range cands {
-		imgs[i] = llm.IntakeImage{Data: c.Data, Mime: c.Mime}
-	}
-	best, conf, err := s.ai.PickProductImage(ctx, s.cfg.LLM.VisionModel, subject, personal, imgs)
-	if err != nil {
-		log.Printf("postIntake %s: image rank: %v", detail.ID, err)
-		return
-	}
-	minConf := s.cfg.Portal.PhotoMinConfidence
-	if minConf == 0 {
-		minConf = 0.7
-	}
-	if best < 0 || conf < minConf {
-		log.Printf("postIntake %s: no photo above threshold (best=%d conf=%.2f min=%.2f) — skipping", detail.ID, best, conf, minConf)
-		return
-	}
-	chosen := cands[best]
-	fname := "product-official" + extFor(chosen.Mime)
-	if _, err := s.hb.UploadAttachment(ctx, detail.ID, fname, "photo", detail.ImageID == "", bytes.NewReader(chosen.Data)); err != nil {
-		log.Printf("postIntake %s: photo attach: %v", detail.ID, err)
-		return
-	}
-	log.Printf("postIntake %s: official product photo attached (conf=%.2f ref=%v src=%s)", detail.ID, conf, personal != nil, chosen.Src)
-
-	// Provenance note (fresh fetch + full merge so nothing gets blanked).
-	fresh, err := s.hb.GetEntity(ctx, detail.ID)
-	if err != nil {
-		return
-	}
-	upd := fullUpdate(fresh)
-	ref := ""
-	if personal != nil {
-		ref = ", matched"
-	}
-	n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("photo (%.2f%s) %s", conf, ref, notes.MDLink("src", chosen.Src))))
-	upd.Notes = &n
-	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
-		log.Printf("postIntake %s: photo note put: %v", detail.ID, err)
-	}
-}
-
-func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut, subject string) {
-	results, err := s.eng.Search(ctx, subject+" manufacturer warranty")
-	if err != nil || len(results) == 0 {
-		return
-	}
-	cands := make([]llm.Candidate, 0, 8)
-	for i, r := range results {
-		if i >= 8 {
-			break
-		}
-		cands = append(cands, llm.Candidate{Title: r.Title, URL: r.URL, Snippet: truncate(r.Snippet, 150)})
-	}
-	est, err := s.ai.EstimateWarranty(ctx, subject, cands)
-	if err != nil || (est.Months == 0 && !est.Lifetime) {
-		return
-	}
-	// Lifetime warranty: set the native bool, no expiry math needed.
-	if est.Lifetime && est.Confidence >= 0.85 && est.Source != "" {
-		fresh, ferr := s.hb.GetEntity(ctx, detail.ID)
-		if ferr != nil {
-			return
-		}
-		upd := fullUpdate(fresh)
-		t := true
-		upd.LifetimeWarranty = &t
-		d := strings.TrimSpace(fresh.WarrantyDetails + "\nlifetime warranty per " + est.Source)
-		if est.ClaimsURL != "" {
-			d += "; claims: " + est.ClaimsURL
-		}
-		upd.WarrantyDetails = &d
-		if s.cfg.Notes.AuditLog {
-			n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("warranty lifetime (%.2f) %s", est.Confidence, notes.MDLink("src", est.Source))))
-			upd.Notes = &n
-		}
-		if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
-			log.Printf("warranty lifetime put %s: %v", detail.ID, err)
-		} else {
-			log.Printf("warranty %s: lifetime (conf=%.2f)", detail.Name, est.Confidence)
-		}
-		return
-	}
-	if est.Months == 0 {
-		return
-	}
-	purchase, err := time.Parse("2006-01-02", strings.TrimSpace(detail.PurchaseDate[:10]))
-	if err != nil {
-		return
-	}
-	expiry := purchase.AddDate(0, est.Months, 0)
-
-	// Re-fetch + full-merge so the PUT can't blank anything set since.
-	fresh, err := s.hb.GetEntity(ctx, detail.ID)
-	if err != nil {
-		return
-	}
-	upd := fullUpdate(fresh)
-	claims := ""
-	if est.ClaimsURL != "" {
-		claims = "; claims: " + est.ClaimsURL
-	}
-	auditLine := ""
-	if est.Confidence >= 0.85 && est.Source != "" {
-		e := expiry.Format("2006-01-02")
-		upd.WarrantyExpires = &e
-		d := strings.TrimSpace(fresh.WarrantyDetails + "\n" + strconv.Itoa(est.Months) + "mo standard warranty per " + est.Source + claims)
-		upd.WarrantyDetails = &d
-		auditLine = fmt.Sprintf("warranty %dmo (%.2f) %s", est.Months, est.Confidence, notes.MDLink("src", est.Source))
-	} else {
-		// Uncertain: estimate note only, no hard expiry (decisions.md D11).
-		d := strings.TrimSpace(fresh.WarrantyDetails + fmt.Sprintf("\nest. %dmo from %s (unverified)%s", est.Months, purchase.Format("2006-01-02"), claims))
-		upd.WarrantyDetails = &d
-		auditLine = fmt.Sprintf("warranty est %dmo (%.2f)", est.Months, est.Confidence)
-	}
-	if s.cfg.Notes.AuditLog && auditLine != "" {
-		n := notes.Append(fresh.Notes, notes.Line(auditLine))
-		upd.Notes = &n
-	}
-	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
-		log.Printf("warranty put %s: %v", detail.ID, err)
-	} else {
-		log.Printf("warranty %s: %dmo (conf=%.2f)", detail.Name, est.Months, est.Confidence)
-	}
 }
 
 // fullUpdate mirrors scheduler.fullUpdateFrom for the portal package.

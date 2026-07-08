@@ -24,13 +24,26 @@ Audience: implementing agents. This is the stable "what/why". Task execution liv
 
 ## 3. Architecture
 
+**Two discrete stages** (D20). Stage names are used across config, docs, and notifications:
+
+| Stage | Process | Remote calls allowed |
+|---|---|---|
+| **Intake** | `docfetch portal` (package `internal/portal`) | Homebox API + **vision model ONLY** — no web searching, so the LLM can move local/offline later |
+| **Curation** | `docfetch scheduler` (package `internal/scheduler`) | Everything: SearXNG searches, doc downloads, image fetches, LLM — enrich, docs, official photos, warranty, tagging |
+
+The stages share no database (separate SQLite volumes); **Homebox itself is the
+bus** between them — intake creates/annotates entities, the scanner's
+change-poll notices (~30s) and curates. The ntfy Attach/Reject buttons obey the
+same boundary: the portal endpoints only write queued `approved`/`rejected`
+notes lines; the scanner downloads/labels on its next pass.
+
 Single Go binary, three subcommands, shared `internal/*` packages:
 
-- `docfetch scheduler` — long-running; in-process cron drives scan/followup/reconcile jobs.
-- `docfetch once` — run one scan pass and exit (for manual runs / testing / debugging).
-- `docfetch portal` — Phase 2; HTTP server for photo intake. Reuses every core package.
+- `docfetch scheduler` — curation stage; in-process cron drives scan/followup/reconcile jobs.
+- `docfetch once` — run one curation pass and exit (for manual runs / testing / debugging).
+- `docfetch portal` — intake stage; HTTP server for photo intake.
 
-### Doc-fetch pipeline (Phase 1)
+### Curation: doc-fetch pipeline
 
 ```
 scheduler tick
@@ -50,21 +63,33 @@ scheduler tick
   reconcile job: GET entities?tags=<unverified> -> weekly ntfy "N items awaiting review" digest
 ```
 
-### Phase 2 intake pipeline (additive)
+### Intake pipeline (portal — vision-only)
 
 ```
-phone -> portal (Tailscale-only PWA) -> capture 1-2 photos (model sticker and/or receipt)
+phone -> portal (Tailscale-only PWA) -> capture up to 4 photos (sticker/receipt/product/warranty)
   -> single multimodal LLM call: classify each photo + extract
-       sticker -> {manufacturer, modelNumber, serialNumber, productType}
-       receipt -> {purchaseFrom, purchaseDate, purchasePrice, (name hint)}
-  -> confirm screen: user reviews/corrects fields; optional location pick (default unset)
-  -> POST create entity (name [+ entityTypeId, tagIds=unverified+provenance, optional parentId])
-  -> PATCH metadata (identity + purchase block)
-  -> attach receipt image (type=receipt)
-  -> SearXNG image search -> official product photo -> attach (type=photo, primary=true)
-  -> existing discovery pipeline -> attach docs (type=manual)
-  -> warranty: purchaseDate anchor; set hard warrantyExpires ONLY if confidently found,
-     else write "est. <term> from <date>" into warrantyDetails, leave warrantyExpires null
+       sticker  -> {manufacturer, modelNumber, serialNumber, productType}
+       receipt  -> {purchaseFrom, purchaseDate, purchasePrice, (name hint)}
+       warranty -> {months, claims URL}
+  -> confirm screen: user reviews/corrects fields; quantity; optional location pick
+  -> POST create entity (tagIds=unverified+provenance, optional parentId)
+  -> PUT metadata (identity + purchase + photo-read warranty)
+  -> attach the intake photos (receipt/warranty/product-personal[primary]/sticker)
+  -> DONE. No web calls. The curation stage takes over via change-poll (~30s).
+```
+
+### Curation extras (scanner — moved from the portal, D20)
+
+```
+per processed item, after the doc phase:
+  photo:    no "product-official" attachment yet -> SearXNG image search
+            -> vision ranks candidates against the user's personal photo
+               (downloaded back from Homebox as the reference)
+            -> conf >= curation.photo.min_confidence -> attach + notes line
+  warranty: purchaseDate set, no expiry, not lifetime -> web search + LLM read
+            -> set hard warrantyExpires ONLY if confidently found + sourced,
+               else "est. <term> (unverified)" into warrantyDetails (D11)
+  both record photo/warranty rows in the decisions ledger (retry-throttled)
 ```
 
 ## 4. External dependencies
@@ -78,68 +103,35 @@ phone -> portal (Tailscale-only PWA) -> capture 1-2 photos (model sticker and/or
 
 ## 5. Config schema (property file, YAML)
 
-Canonical example. Secrets are env-interpolated (`${VAR}`), injected by Ansible from vault.
+Canonical, fully-commented example: [`config.example.yaml`](../config.example.yaml).
+Secrets are env-interpolated (`${VAR}`), injected by Ansible from vault.
+
+The schema mirrors the two stages (D20). Skeleton:
 
 ```yaml
-homebox:
-  url: https://homebox.jentaculum.net
-  token: ${HOMEBOX_TOKEN}
-  page_size: 100
-
-schedule:
-  scan_new:   "0 */6 * * *"        # discover + initial fetch on new items
-  followup:   "0 4 * * 0"          # weekly re-check known items for new/updated docs
-  followup_after: 720h             # only re-check items whose last fetch is older than this
-
-discovery:
-  searxng_url: http://searxng:8080
-  queries:
-    - "{manufacturer} {modelNumber} user manual filetype:pdf"
-    - "{manufacturer} {modelNumber} datasheet pdf"
-  max_candidates: 8
-  min_pdf_bytes: 20000
-  max_pdf_bytes: 52428800
-  rate_limit_per_min: 20           # global outbound cap w/ jitter
-  backoff_base: 24h                # not-found exponential backoff base
-
-llm:
-  base_url: https://openrouter.ai/api/v1
-  api_key: ${OPENROUTER_API_KEY}
-  rerank_model: "meta-llama/llama-3.1-8b-instruct"   # cheap 8B; tiebreak only
-  vision_model: "google/gemini-2.0-flash-lite-001"   # Phase 2
-  max_snippet_chars: 150
-
-confidence:
-  auto_attach_threshold: 0.7       # >= attach; below -> review-gate
-  require_model_match: true
-
-attach:
-  doc_type: manual                 # native Homebox attachment enum
-  skip_if_manual_exists: true
-
-intake:                            # tags-based triage (labels are "tags" in this fork)
-  unverified_tag: "docfetch/unverified"   # created at startup if missing
-  provenance_tag: "source/docfetch"       # items created with no entityTypeId (no "Item" type exists)
-
-reconcile:
-  digest_schedule: "0 9 * * 1"     # weekly GET entities?tags=<unverified> -> ntfy count
-
-notify:
-  ntfy_url: http://ntfy:8080
-  ntfy_topic: homelab
-
-portal:                            # Phase 2 (dormant until then)
-  listen: ":8099"
-  location_entity_type: "Location" # source for optional location dropdown
-  default_location: null           # unset by default
-  intake_photos: [sticker, receipt]
-  warranty_estimate: true
-
-notes:
-  audit_log: false                 # opt-in: terse dated line per derived write (photos/warranty/meta)
-                                   # with confidence; URLs always render as [pdf](…)/[web](…)/[src](…)
-
+# shared
+homebox:  {url, token, page_size}
+llm:      {base_url, api_key, rerank_model, vision_model, max_snippet_chars}
+tags:     {unverified, provenance}        # triage/provenance (labels are "tags" in this fork)
+notify:   {ntfy_url, ntfy_topic, ntfy_token}
+notes:    {audit_log}                     # opt-in terse line per derived write, with confidence;
+                                          # URLs always render as [pdf](…)/[web](…)/[src](…)
 state_db: /data/docfetch.db
+
+# stage 1: item intake (portal) — vision-model calls only, no web searching
+intake:
+  {listen, public_url, location_entity_type, photos}
+
+# stage 2: curation (scanner) — ALL web egress
+curation:
+  schedule:  {scan_new, followup, followup_after, change_poll}
+  discovery: {searxng_url, language, pipeline, queries, max_candidates,
+              min/max_pdf_bytes, rate_limit_per_min, backoff_base}
+  docs:      {doc_type, skip_if_manual_exists, auto_attach_threshold, require_model_match}
+  enrich:    {enabled, fill_only, auto_write_threshold, min_agreeing_sources, back_check, fields}
+  photo:     {enabled, min_confidence}    # official product photo
+  warranty:  {enabled}
+  reconcile: {digest_schedule}
 ```
 
 ### Learning feedback loop (Phase A)

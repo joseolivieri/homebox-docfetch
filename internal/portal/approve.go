@@ -1,17 +1,22 @@
 package portal
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/scheduler"
 )
+
+// The ntfy review-gate buttons land here. Both handlers follow the intake
+// stage's boundary rule (vision-only remote calls): neither downloads
+// anything. They write a queued "approved"/"rejected" line into the entity's
+// docfetch notes block — Homebox is the shared bus between the two stages —
+// and the scanner acts on it within ~change_poll seconds (the notes PUT bumps
+// updatedAt, which trips the change-poll).
 
 // verifyAction checks the HMAC-signed (action, entity, url) triple common to
 // the one-tap ntfy endpoints. Returns ("", "") after writing the error.
@@ -31,16 +36,25 @@ func (s *Server) verifyAction(w http.ResponseWriter, r *http.Request, action str
 	return id, docURL
 }
 
-// handleApprove is the one-tap target of the ntfy Attach action button:
-// verifies the HMAC-signed (entity, url) pair, downloads the candidate doc,
-// and attaches it as the manual. Tailnet exposure + signature = no arbitrary
-// attach from a crafted link.
+// handleApprove queues a one-tap approval: "approved [pdf](url)". The scanner
+// downloads and attaches the exact approved URL on its next pass (skipping
+// content verification — a human approved it) and records the confirmation
+// label in the learning ledger.
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	id, docURL := s.verifyAction(w, r, "approve")
+	s.queueAction(w, r, "approve", "approved", "pdf", "manual approved — attaching shortly")
+}
+
+// handleReject queues a permanent negative label: "rejected [link](url)".
+// The scanner ingests it, never proposes the URL again, and re-searches.
+func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
+	s.queueAction(w, r, "reject", "rejected", "link", "candidate rejected")
+}
+
+func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, keyword, label, okMsg string) {
+	id, docURL := s.verifyAction(w, r, action)
 	if id == "" {
 		return
 	}
-
 	ctx := r.Context()
 	detail, err := s.hb.GetEntity(ctx, id)
 	if err != nil {
@@ -48,78 +62,36 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Idempotent: a second tap (or an already-attached manual) is a no-op.
-	for _, a := range detail.Attachments {
-		if a.Type == "manual" {
-			respondApprove(w, r, detail.Name, "manual already attached")
-			return
+	existing := notes.RejectedURLs(detail.Notes)
+	if keyword == "approved" {
+		existing = notes.ApprovedURLs(detail.Notes)
+		for _, a := range detail.Attachments {
+			if a.Type == "manual" {
+				respondAction(w, r, detail.Name, "manual already attached")
+				return
+			}
 		}
 	}
-
-	data, err := s.eng.Download(ctx, docURL, 50<<20)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, fmt.Errorf("download: %w", err))
-		return
-	}
-	fname := strings.TrimSpace(detail.Manufacturer + "-" + detail.ModelNumber)
-	if fname == "-" || fname == "" {
-		fname = "manual"
-	}
-	if _, err := s.hb.UploadAttachment(ctx, id, fname+".pdf", "manual", false, bytes.NewReader(data)); err != nil {
-		writeErr(w, http.StatusBadGateway, fmt.Errorf("attach: %w", err))
-		return
-	}
-	log.Printf("approve: manual attached to %q (%s) via ntfy button", detail.Name, id)
-	if fresh, err := s.hb.GetEntity(ctx, id); err == nil {
-		upd := fullUpdate(fresh)
-		n := notes.Append(fresh.Notes, notes.Line("manual attached via approve "+notes.MDLink("pdf", docURL)))
-		upd.Notes = &n
-		// Record the source so the item carries provenance like auto-attaches do.
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", notes.MDLink("pdf", docURL))
-		if _, err := s.hb.PutEntity(ctx, id, upd); err != nil {
-			log.Printf("approve note put %s: %v", id, err)
-		}
-	}
-	respondApprove(w, r, detail.Name, "manual attached")
-}
-
-// handleReject is the one-tap target of the ntfy Reject action button. It
-// writes a "rejected [link](url)" line into the entity's docfetch notes block —
-// the durable negative label. The scheduler (separate process, separate
-// SQLite) ingests it on the next scan: the URL joins the ledger as rejected
-// and is never proposed again, and the notes PUT bumps updatedAt so the
-// change-poll re-searches within ~30s minus the rejected URL.
-func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
-	id, docURL := s.verifyAction(w, r, "reject")
-	if id == "" {
-		return
-	}
-	ctx := r.Context()
-	detail, err := s.hb.GetEntity(ctx, id)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
-	}
-	// Idempotent: a second tap is a no-op.
-	for _, u := range notes.RejectedURLs(detail.Notes) {
+	for _, u := range existing {
 		if u == docURL {
-			respondApprove(w, r, detail.Name, "already rejected")
+			respondAction(w, r, detail.Name, "already "+keyword)
 			return
 		}
 	}
 	upd := fullUpdate(detail)
-	n := notes.Append(detail.Notes, notes.Line("rejected "+notes.MDLink("link", docURL)))
+	n := notes.Append(detail.Notes, notes.Line(keyword+" "+notes.MDLink(label, docURL)))
 	upd.Notes = &n
 	if _, err := s.hb.PutEntity(ctx, id, upd); err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
-	log.Printf("reject: %q (%s) candidate rejected via ntfy button — %s", detail.Name, id, docURL)
-	respondApprove(w, r, detail.Name, "candidate rejected")
+	log.Printf("%s queued for %q (%s) via ntfy button — %s", keyword, detail.Name, id, docURL)
+	respondAction(w, r, detail.Name, okMsg)
 }
 
-// respondApprove answers both the ntfy http-action (plain 200) and a browser
+// respondAction answers both the ntfy http-action (plain 200) and a browser
 // tap (tiny confirmation page).
-func respondApprove(w http.ResponseWriter, r *http.Request, name, msg string) {
+func respondAction(w http.ResponseWriter, r *http.Request, name, msg string) {
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">

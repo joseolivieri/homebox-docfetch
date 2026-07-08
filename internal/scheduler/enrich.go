@@ -171,6 +171,8 @@ func fullUpdateFrom(d *homebox.EntityOut) homebox.EntityUpdate {
 		// PUT is a full replace; omitting parentId clears the location.
 		upd.ParentID = cp(d.Parent.ID)
 	}
+	// PUT without fields wipes all custom fields (verified live) — round-trip.
+	upd.Fields = d.Fields
 	var tags []string
 	for _, t := range d.Tags {
 		tags = append(tags, t.ID)

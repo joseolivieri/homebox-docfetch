@@ -1,34 +1,16 @@
 # homebox-docfetch property file (example). See docs/spec.md §5.
 # ${VAR} values are replaced from the environment at load time (secrets).
+#
+# The file mirrors the two pipeline stages (docs/how-it-works.md):
+#   intake:   phone portal — vision-model calls ONLY, no web searching
+#   curation: recurring scanner — ALL web egress (enrich, docs, photos, warranty)
+
+# --- shared ---
 
 homebox:
   url: https://homebox.jentaculum.net
   token: ${HOMEBOX_TOKEN}
   page_size: 100
-
-schedule:
-  scan_new: "0 */6 * * *"          # discover + initial fetch on new items
-  followup: "0 4 * * 0"            # weekly re-check known items for new/updated docs
-  followup_after: 720h             # only re-check items whose last fetch is older than this
-  change_poll: 30s                 # probe for adds/edits this often; scan on change (0 = off)
-
-discovery:
-  searxng_url: http://searxng:8080
-  language: en                     # bias manuals/warranty/photo sources to this language
-  # Source priority for manuals. Stops at the first stage with a confident pick.
-  #   brand-site: official-domain search + support-page PDF harvesting (best source)
-  #   web-pdf:    general search with filetype:pdf
-  #   web-html:   general search without filetype (HTML manual pages; linkable fallback)
-  pipeline: [brand-site, web-pdf, web-html]
-  # {subject} = manufacturer+model when a model is known, else manufacturer+name.
-  queries:
-    - "{subject} user manual filetype:pdf"
-    - "{subject} manual pdf"
-  max_candidates: 8
-  min_pdf_bytes: 20000
-  max_pdf_bytes: 52428800
-  rate_limit_per_min: 20
-  backoff_base: 24h
 
 llm:
   base_url: https://openrouter.ai/api/v1
@@ -37,48 +19,15 @@ llm:
   vision_model: "google/gemini-2.5-flash-lite"
   max_snippet_chars: 150
 
-confidence:
-  auto_attach_threshold: 0.7
-  require_model_match: true
-
-attach:
-  doc_type: manual
-  skip_if_manual_exists: true
-
-intake:
-  unverified_tag: "docfetch/unverified"
-  provenance_tag: "source/docfetch"
-
-# Metadata auto-completion (Phase 1.5). Fill-only: never overwrites human data.
-# A field writes only when >=min_agreeing_sources domains corroborate it AND the
-# back-check round-trip passes AND confidence >= auto_write_threshold.
-enrich:
-  enabled: true
-  fill_only: true
-  auto_write_threshold: 0.85
-  min_agreeing_sources: 2
-  back_check: true
-  fields: [manufacturer, modelNumber, name, category]
-  provenance_note: true
-
-reconcile:
-  digest_schedule: "0 9 * * 1"
+tags:                              # triage/provenance markers (labels are "tags" in this fork)
+  unverified: "docfetch/unverified"   # created at startup if missing
+  provenance: "source/docfetch"
 
 notify:
   ntfy_url: https://ntfy.jentaculum.net
   ntfy_topic: homelab
   ntfy_token: ${NTFY_TOKEN}         # optional; required if the topic restricts publish
 
-portal:
-  listen: ":8099"
-  location_entity_type: "Location"
-  default_location: null
-  intake_photos: [sticker, receipt]
-  warranty_estimate: true
-  photo_min_confidence: 0.7        # official photo attaches only at/above this; below -> none
-  public_url: https://docfetch.ingress-1.jentaculum.net   # enables ntfy approve buttons
-
-# Machine-written log block inside each entity's notes field.
 notes:
   # Opt-in: log a terse line for EVERY derived write (intake photos, official
   # photo, warranty, metadata) with confidence scores. Off = only doc
@@ -86,3 +35,70 @@ notes:
   audit_log: true
 
 state_db: /data/docfetch.db
+
+# --- stage 1: item intake (phone portal) ---
+# Boundary rule: the only remote call is the vision model (photo analysis),
+# so the LLM can move local/offline later. The ntfy Attach/Reject buttons only
+# queue approved/rejected notes lines — the scanner acts on them.
+
+intake:
+  listen: ":8099"
+  public_url: https://docfetch.ingress-1.jentaculum.net   # target of ntfy action buttons
+  location_entity_type: "Location"
+  photos: [sticker, receipt, product, warranty]
+
+# --- stage 2: curation (recurring scanner) ---
+# All web searching: metadata enrichment, manuals, official photos, warranty.
+
+curation:
+  schedule:
+    scan_new: "*/15 * * * *"       # discover + initial fetch on new items
+    followup: "0 4 * * 0"          # weekly re-check known items
+    followup_after: 720h           # only re-check items whose last fetch is older
+    change_poll: 30s               # probe for adds/edits this often; scan on change (0 = off)
+
+  discovery:
+    searxng_url: http://searxng:8080
+    language: en                   # bias manuals/warranty/photo sources to this language
+    # Source priority for manuals. Stops at the first stage with a confident pick.
+    #   brand-site: official-domain search + support-page PDF harvesting (best source)
+    #   web-pdf:    general search with filetype:pdf
+    #   web-html:   general search without filetype (HTML manual pages; linkable fallback)
+    pipeline: [brand-site, web-pdf, web-html]
+    # {subject} = manufacturer+model when a model is known, else manufacturer+name.
+    queries:
+      - "{subject} user manual filetype:pdf"
+      - "{subject} manual pdf"
+    max_candidates: 8
+    min_pdf_bytes: 20000
+    max_pdf_bytes: 52428800
+    rate_limit_per_min: 20
+    backoff_base: 24h
+
+  docs:
+    doc_type: manual               # native Homebox attachment enum
+    skip_if_manual_exists: true
+    auto_attach_threshold: 0.7     # >= attach; below -> ntfy review-gate
+    require_model_match: true
+
+  # Metadata auto-completion. Fill-only: never overwrites human data. A field
+  # writes only when >=min_agreeing_sources domains corroborate it AND the
+  # back-check round-trip passes AND confidence >= auto_write_threshold.
+  enrich:
+    enabled: true
+    fill_only: true
+    auto_write_threshold: 0.85
+    min_agreeing_sources: 2
+    back_check: true
+    fields: [manufacturer, modelNumber, name, category]
+    provenance_note: true
+
+  photo:                           # official product photo (vision-ranked)
+    enabled: true
+    min_confidence: 0.7            # below the bar, NO photo attaches
+
+  warranty:                        # warranty estimate (needs a purchase date)
+    enabled: true
+
+  reconcile:
+    digest_schedule: "0 9 * * 1"   # weekly digest: review backlog + ledger stats

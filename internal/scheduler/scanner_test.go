@@ -54,6 +54,9 @@ func (f *fakeAPI) UploadAttachment(_ context.Context, id, name, t string, p bool
 	f.uploads++
 	return f.details[id], nil
 }
+func (f *fakeAPI) DownloadAttachment(_ context.Context, entityID, attachmentID string, maxBytes int64) ([]byte, string, error) {
+	return nil, "", nil
+}
 func (f *fakeAPI) EnsureTag(_ context.Context, name string) (string, error) {
 	return "tag-unverified", nil
 }

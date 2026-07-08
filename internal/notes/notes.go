@@ -42,7 +42,17 @@ var bareURL = regexp.MustCompile(`https?://\S+`)
 // block. These lines are written by the ntfy Reject button (via the portal) or
 // by hand, and act as durable negative labels: the scanner must never propose
 // these URLs again. Both [label](url) and bare-URL forms are recognized.
-func RejectedURLs(existing string) []string {
+func RejectedURLs(existing string) []string { return markedURLs(existing, "rejected") }
+
+// ApprovedURLs extracts doc URLs from "approved" log lines. Written by the
+// ntfy Attach button (via the portal): the portal makes no web calls, so
+// approval is queued through the notes block and the scanner downloads and
+// attaches on its next pass (~30s via the change-poll).
+func ApprovedURLs(existing string) []string { return markedURLs(existing, "approved") }
+
+// markedURLs scans docfetch-block log lines containing the keyword and
+// returns their URL targets.
+func markedURLs(existing, keyword string) []string {
 	bi := strings.Index(existing, Begin)
 	ei := strings.Index(existing, End)
 	if bi < 0 || ei <= bi {
@@ -51,7 +61,7 @@ func RejectedURLs(existing string) []string {
 	var out []string
 	for _, line := range strings.Split(existing[bi:ei], "\n") {
 		l := strings.TrimSpace(line)
-		if !strings.HasPrefix(l, "-") || !strings.Contains(l, "rejected") {
+		if !strings.HasPrefix(l, "-") || !strings.Contains(l, keyword) {
 			continue
 		}
 		if m := mdTarget.FindStringSubmatch(l); m != nil {

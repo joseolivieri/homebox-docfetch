@@ -103,15 +103,15 @@ func probe(ctx context.Context, cfgPath string) error {
 	}
 	fmt.Printf("entities: total=%d (page has %d)\n", list.Total, len(list.Items))
 
-	unverID, err := hb.EnsureTag(ctx, cfg.Intake.UnverifiedTag)
+	unverID, err := hb.EnsureTag(ctx, cfg.Tags.Unverified)
 	if err != nil {
 		return fmt.Errorf("ensure unverified tag: %w", err)
 	}
-	provID, err := hb.EnsureTag(ctx, cfg.Intake.ProvenanceTag)
+	provID, err := hb.EnsureTag(ctx, cfg.Tags.Provenance)
 	if err != nil {
 		return fmt.Errorf("ensure provenance tag: %w", err)
 	}
-	fmt.Printf("tags ready: %s=%s  %s=%s\n", cfg.Intake.UnverifiedTag, unverID, cfg.Intake.ProvenanceTag, provID)
+	fmt.Printf("tags ready: %s=%s  %s=%s\n", cfg.Tags.Unverified, unverID, cfg.Tags.Provenance, provID)
 
 	// Write-path lifecycle on a clearly-marked temp entity.
 	ent, err := hb.CreateEntity(ctx, homebox.EntityCreate{
