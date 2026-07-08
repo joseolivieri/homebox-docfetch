@@ -236,11 +236,15 @@ func (e *Engine) pick(ctx context.Context, it Item, cands []Candidate, requireMo
 
 // bestHTML selects the strongest HTML manual page for the link fallback:
 // official-domain pages first, then model-matching ones. nil when none qualify.
+// bestHTML picks the linkable manual page. ModelMatch (identity relevance) is
+// REQUIRED — Official alone is not enough: a brand-domain page for a different
+// product must never become this item's Manual (web) link (observed live: an
+// Anker Prime page linked onto a Soundcore C30i).
 func bestHTML(cands []Candidate) *Candidate {
 	var best *Candidate
 	for i := range cands {
 		c := &cands[i]
-		if !c.IsHTML || (!c.Official && !c.ModelMatch) {
+		if !c.IsHTML || !c.ModelMatch {
 			continue
 		}
 		if best == nil || c.Score > best.Score || (c.Official && !best.Official) {

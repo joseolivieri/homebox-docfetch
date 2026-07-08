@@ -78,6 +78,18 @@ func statLine(prefix string, m map[string]int) string {
 	return prefix + ": " + strings.Join(parts, ", ")
 }
 
+// Sweep runs the override sweep on demand — wired to the cron scan cadence
+// because attachment deletions do NOT bump the entity's updatedAt (verified
+// live), so the diff-driven scan never sees them. Only a real per-item fetch
+// notices a removed manual or photo.
+func (s *Scanner) Sweep(ctx context.Context) error {
+	if err := s.bootstrap(ctx); err != nil {
+		return err
+	}
+	s.sweepOverrides(ctx)
+	return nil
+}
+
 // sweepOverrides walks items the pipeline acted on and diffs current Homebox
 // state against what was written.
 func (s *Scanner) sweepOverrides(ctx context.Context) {
@@ -110,6 +122,13 @@ func (s *Scanner) sweepOverrides(ctx context.Context) {
 		}
 
 		s.sweepEnrichOverrides(ctx, detail)
+
+		// Photo/warranty re-check: their own gates make this a cheap no-op
+		// when the artifacts are present — and a deleted product-official
+		// photo becomes a rejection + re-fetch here (curatePhoto handles the
+		// labeling), since deletions never surface through updatedAt.
+		s.curatePhoto(ctx, detail)
+		s.curateWarranty(ctx, detail)
 	}
 }
 

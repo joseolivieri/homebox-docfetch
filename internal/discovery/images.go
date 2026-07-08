@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -84,7 +85,9 @@ func (e *Engine) ProductImageCandidates(ctx context.Context, subject, brand stri
 		}
 	}
 	// Three tiers: official brand-domain images, then region/global hosts,
-	// then other-country-market sources — lower tiers only fill leftover slots.
+	// then other-country-market AND marketplace sources (seller-uploaded
+	// imagery — the same wrong-product risk as marketplace docs) — lower
+	// tiers only fill leftover slots.
 	brandDomain := ""
 	if brand != "" {
 		brandDomain = e.brandDomain(ctx, brand)
@@ -94,7 +97,8 @@ func (e *Engine) ProductImageCandidates(ctx context.Context, subject, brand stri
 		switch {
 		case brandDomain != "" && (hostMatches(r.ImgSrc, brandDomain) || hostMatches(r.URL, brandDomain)):
 			official = append(official, r)
-		case isCountrySpecificURL(r.ImgSrc, e.opt.Region) || isCountrySpecificURL(r.URL, e.opt.Region):
+		case isCountrySpecificURL(r.ImgSrc, e.opt.Region) || isCountrySpecificURL(r.URL, e.opt.Region) ||
+			isMarketplaceImageHost(r.ImgSrc):
 			deferred = append(deferred, r)
 		default:
 			preferred = append(preferred, r)
@@ -138,6 +142,11 @@ func (e *Engine) downloadImage(ctx context.Context, u string, maxBytes int64) ([
 	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(ct, "image/") {
 		return nil, "", fmt.Errorf("not an image: %s (%s)", resp.Status, ct)
 	}
+	if strings.Contains(ct, "svg") || strings.Contains(ct, "icon") {
+		// Vision providers reject SVG (observed live: Gemini 400 on
+		// image/svg+xml); icons are never product photos.
+		return nil, "", fmt.Errorf("unsupported image type %s", ct)
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, "", err
@@ -156,6 +165,61 @@ func hostMatches(raw, domain string) bool {
 	}
 	h := strings.ToLower(u.Host)
 	return h == domain || strings.HasSuffix(h, "."+domain)
+}
+
+var ogImageRe = regexp.MustCompile(`(?is)<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)(?::src)?["'][^>]+content=["']([^"']+)["']|<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|twitter:image)(?::src)?["']`)
+
+// OGImage fetches a page and returns its declared canonical product image
+// (og:image / twitter:image), downloaded. The manufacturer's own product page
+// stating "this is the picture of this product" is the strongest photo marker
+// there is — no search, no ranking. Returns nil when the page has none.
+func (e *Engine) OGImage(ctx context.Context, pageURL string, maxBytes int64) (*ImageCandidate, error) {
+	e.limiter.wait(ctx)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", browserUA)
+	resp, err := e.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), "html") {
+		return nil, nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	m := ogImageRe.FindStringSubmatch(string(body))
+	if m == nil {
+		return nil, nil
+	}
+	imgURL := m[1]
+	if imgURL == "" {
+		imgURL = m[2]
+	}
+	base := resp.Request.URL
+	u, err := url.Parse(strings.TrimSpace(imgURL))
+	if err != nil {
+		return nil, nil
+	}
+	abs := base.ResolveReference(u).String()
+	data, mime, err := e.downloadImage(ctx, abs, maxBytes)
+	if err != nil || len(data) < 5_000 {
+		return nil, nil
+	}
+	return &ImageCandidate{Data: data, Mime: mime, Src: abs, Title: "og:image " + pageURL}, nil
+}
+
+// isMarketplaceImageHost flags marketplace CDNs whose product imagery is
+// seller-uploaded (deferred tier, not blocked — sometimes it's all there is).
+func isMarketplaceImageHost(u string) bool {
+	l := strings.ToLower(u)
+	for _, m := range []string{"media-amazon", "ssl-images-amazon", "ebayimg", "walmartimages", "bbystatic", "scene7", "susercontent", "alicdn", "stockx"} {
+		if strings.Contains(l, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func isJunkImageHost(u string) bool {

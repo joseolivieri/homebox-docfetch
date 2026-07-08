@@ -77,20 +77,29 @@ func (e *Engine) brandSiteCandidates(ctx context.Context, it Item) []Candidate {
 		if !strings.Contains(strings.ToLower(r.URL), domain) {
 			continue
 		}
+		// Identity gate: a brand-domain page must reference THIS product
+		// before anything from it earns Official trust. Site search with a
+		// bare model number returns unrelated products from the same maker
+		// (observed live: the Anker Prime 96K page for a C30i query), and
+		// page-follow from a wrong page poisons everything downstream.
+		if !identityMatch(it, r.URL+" "+r.Title) {
+			continue
+		}
 		if strings.HasSuffix(strings.ToLower(r.URL), ".pdf") {
 			cands = append(cands, Candidate{
 				Title: r.Title, URL: r.URL,
 				Snippet:  truncate(r.Content, e.opt.MaxSnippetChars),
-				Official: true, Score: 3,
+				Official: true, ModelMatch: true, Score: 3,
 			})
 			continue
 		}
 		// HTML page on the brand domain: candidate itself (link fallback) and
-		// a source of direct PDF links.
+		// a source of direct PDF links. ModelMatch records that the identity
+		// gate passed.
 		cands = append(cands, Candidate{
 			Title: r.Title, URL: r.URL,
 			Snippet:  truncate(r.Content, e.opt.MaxSnippetChars),
-			Official: true, IsHTML: true, Score: 1,
+			Official: true, ModelMatch: true, IsHTML: true, Score: 1,
 		})
 		if pagesFollowed < 2 {
 			pagesFollowed++
@@ -99,7 +108,7 @@ func (e *Engine) brandSiteCandidates(ctx context.Context, it Item) []Candidate {
 					Title:    "PDF linked from " + r.Title,
 					URL:      pdfURL,
 					Snippet:  "linked from official support page",
-					Official: true, Score: 4,
+					Official: true, ModelMatch: true, Score: 4,
 				})
 			}
 		}
@@ -108,6 +117,29 @@ func (e *Engine) brandSiteCandidates(ctx context.Context, it Item) []Candidate {
 		}
 	}
 	return dedupeByURL(cands, e.opt.MaxCandidates)
+}
+
+// identityMatch reports whether a URL/title haystack references the item.
+// With a model number known, the model must appear (precise). Without one,
+// any distinctive product-name token (>=4 chars, not the manufacturer name)
+// counts — looser, but generic-word false positives are bounded by the
+// downstream verify/link gates.
+func identityMatch(it Item, hay string) bool {
+	h := norm(hay)
+	if m := norm(it.ModelNumber); m != "" {
+		return strings.Contains(h, m)
+	}
+	mfr := norm(it.Manufacturer)
+	for _, w := range strings.Fields(it.Name) {
+		t := norm(w)
+		if len(t) < 4 || (mfr != "" && strings.Contains(mfr, t)) {
+			continue
+		}
+		if strings.Contains(h, t) {
+			return true
+		}
+	}
+	return false
 }
 
 var (

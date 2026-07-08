@@ -24,12 +24,14 @@ import (
 // CurationSearch is the web-search surface curation needs (SearXNG-backed).
 type CurationSearch interface {
 	ProductImageCandidates(ctx context.Context, subject, brand string, max int, maxBytes int64) ([]discovery.ImageCandidate, error)
+	OGImage(ctx context.Context, pageURL string, maxBytes int64) (*discovery.ImageCandidate, error)
 	Search(ctx context.Context, query string) ([]enrich.SearchResult, error)
 }
 
-// Vision is the LLM surface curation needs (image ranking + warranty read).
+// Vision is the LLM surface curation needs (image selection + warranty read).
 type Vision interface {
-	PickProductImage(ctx context.Context, visionModel, subject string, reference *llm.IntakeImage, candidates []llm.IntakeImage) (int, float64, error)
+	PickProductImage(ctx context.Context, visionModel, subject, category string, reference *llm.IntakeImage, candidates []llm.IntakeImage) (int, float64, error)
+	VerifyProductImage(ctx context.Context, visionModel, subject, category string, img llm.IntakeImage) (bool, float64, error)
 	EstimateWarranty(ctx context.Context, itemDesc string, cands []llm.Candidate) (*llm.WarrantyEstimate, error)
 }
 
@@ -71,25 +73,77 @@ func (s *Scanner) attachApproved(ctx context.Context, detail *homebox.EntityOut,
 	return s.store.Upsert(ctx, base)
 }
 
-// curatePhoto fetches an official product photo when the item lacks one:
-// image search -> vision ranking (anchored to the user's own photo when one
-// exists) -> confidence gate -> attach + provenance note.
+// curatePhoto fetches an official product photo when the item lacks one.
+// Marker priority (identity over pixel similarity — a personal-photo anchor
+// once matched a charger instead of the earbuds):
+//
+//  1. og:image from official pages we already know (QR target, Manual (web))
+//     — the manufacturer's own "this is the product picture" declaration;
+//     one vision yes/no sanity check, no search.
+//  2. Image search (brand-domain tier first) -> vision selects by product
+//     identity (manufacturer/model/category); the user's photo is only a
+//     variant tie-breaker.
+//
+// A user deleting the product-official attachment counts as a rejection: the
+// old source is labeled rejected, filtered, and the stage re-runs (~30s via
+// the change-poll updatedAt bump).
 func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 	if !s.cfg.PhotoEnabled || s.curSearch == nil || s.vision == nil {
 		return
 	}
-	if hasOfficialPhoto(detail) || s.recentClassDecision(ctx, detail.ID, "photo") {
+	if hasOfficialPhoto(detail) {
+		return
+	}
+	last, _ := s.store.LatestDecision(ctx, detail.ID, "photo")
+	if last != nil && last.Outcome == "attached" && last.Label == "" {
+		// We attached one and it is gone -> the user deleted it. Negative
+		// label; never propose that image again; fall through to re-fetch.
+		if n, _ := s.store.LabelDecisions(ctx, detail.ID, last.ChosenURL, store.LabelRejected, "override"); n > 0 {
+			log.Printf("photo %s: user removed %s — labeled rejected, re-fetching", detail.ID, last.ChosenURL)
+		}
+	} else if s.recentClassDecision(ctx, detail.ID, "photo") {
 		return
 	}
 	subject := subjectOf(detail)
 	if subject == "" {
 		return
 	}
+	category := categoryOf(detail)
+	rejected, _ := s.store.RejectedURLs(ctx, detail.ID, "photo")
+
+	// Stage 1: og:image from known official pages.
+	for _, page := range s.officialPages(detail) {
+		og, err := s.curSearch.OGImage(ctx, page, 10<<20)
+		if err != nil || og == nil || rejected[og.Src] {
+			continue
+		}
+		ok, conf, err := s.vision.VerifyProductImage(ctx, s.visionModel, subject, category,
+			llm.IntakeImage{Data: og.Data, Mime: og.Mime})
+		if err != nil {
+			log.Printf("photo %s: og verify: %v", detail.ID, err)
+			continue
+		}
+		if !ok || conf < s.cfg.PhotoMinConfidence {
+			log.Printf("photo %s: og:image rejected (match=%v conf=%.2f) %s", detail.ID, ok, conf, og.Src)
+			continue
+		}
+		s.attachPhoto(ctx, detail, *og, conf, "og-image")
+		return
+	}
+
+	// Stage 2: image search + identity-based vision selection.
 	cands, err := s.curSearch.ProductImageCandidates(ctx, subject, detail.Manufacturer, 5, 10<<20)
 	if err != nil {
 		log.Printf("photo %s: image search: %v", detail.ID, err)
 		return
 	}
+	kept := cands[:0]
+	for _, c := range cands {
+		if !rejected[c.Src] {
+			kept = append(kept, c)
+		}
+	}
+	cands = kept
 	if len(cands) == 0 {
 		s.recordClass(ctx, detail, "photo", "notfound", "", 0)
 		return
@@ -99,7 +153,7 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 		imgs[i] = llm.IntakeImage{Data: c.Data, Mime: c.Mime}
 	}
 	ref := s.personalPhotoRef(ctx, detail)
-	best, conf, err := s.vision.PickProductImage(ctx, s.visionModel, subject, ref, imgs)
+	best, conf, err := s.vision.PickProductImage(ctx, s.visionModel, subject, category, ref, imgs)
 	if err != nil {
 		log.Printf("photo %s: image rank: %v", detail.ID, err)
 		return
@@ -109,27 +163,63 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 		s.recordClass(ctx, detail, "photo", "notfound", "", conf)
 		return
 	}
-	chosen := cands[best]
+	s.attachPhoto(ctx, detail, cands[best], conf, "image-search")
+}
+
+// attachPhoto uploads the chosen official photo + provenance note + ledger row.
+func (s *Scanner) attachPhoto(ctx context.Context, detail *homebox.EntityOut, chosen discovery.ImageCandidate, conf float64, stage string) {
 	fname := "product-official" + extFor(chosen.Mime)
 	if _, err := s.api.UploadAttachment(ctx, detail.ID, fname, "photo", detail.ImageID == "", bytes.NewReader(chosen.Data)); err != nil {
 		log.Printf("photo %s: attach: %v", detail.ID, err)
 		return
 	}
-	log.Printf("photo %s: official product photo attached (conf=%.2f ref=%v src=%s)", detail.ID, conf, ref != nil, chosen.Src)
+	log.Printf("photo %s: official product photo attached (conf=%.2f stage=%s src=%s)", detail.ID, conf, stage, chosen.Src)
 
 	if fresh, err := s.api.GetEntity(ctx, detail.ID); err == nil {
 		upd := fullUpdateFrom(fresh)
-		matched := ""
-		if ref != nil {
-			matched = ", matched"
-		}
-		n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("photo (%.2f%s) %s", conf, matched, notes.MDLink("src", chosen.Src))))
+		n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("photo (%.2f, %s) %s", conf, stage, notes.MDLink("src", chosen.Src))))
 		upd.Notes = &n
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("photo %s: note put: %v", detail.ID, err)
 		}
 	}
-	s.recordClass(ctx, detail, "photo", "attached", chosen.Src, conf)
+	err := s.store.RecordDecision(ctx, &store.Decision{
+		EntityID: detail.ID, EntityName: detail.Name, DocClass: "photo",
+		Stage: stage, Outcome: "attached", ChosenURL: chosen.Src, Confidence: conf,
+	})
+	if err != nil {
+		log.Printf("ledger record %s/photo: %v", detail.ID, err)
+	}
+}
+
+// officialPages lists pages with manufacturer provenance already on the item:
+// label QR targets and the linked official manual page.
+func (s *Scanner) officialPages(detail *homebox.EntityOut) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(u string) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, u := range notes.QRURLs(detail.Notes) {
+		add(u)
+	}
+	add(notes.Target(homebox.FieldValue(detail.Fields, "Manual (web)")))
+	return out
+}
+
+// categoryOf derives the product type from the item's tags (enrichment writes
+// the category as a tag). Machine/triage tags are skipped.
+func categoryOf(detail *homebox.EntityOut) string {
+	for _, t := range detail.Tags {
+		if strings.Contains(t.Name, "/") { // docfetch/unverified, source/docfetch
+			continue
+		}
+		return t.Name
+	}
+	return ""
 }
 
 // curateWarranty estimates the manufacturer warranty. Hard expiry only with a
@@ -259,11 +349,14 @@ func (s *Scanner) recentClassDecision(ctx context.Context, entityID, class strin
 		return false
 	}
 	if d.Outcome == "attached" {
-		return true
+		// A rejected attach (user deleted the artifact) must not block re-runs.
+		return d.Label != store.LabelRejected
 	}
-	window := s.cfg.FollowupAfter
+	// notfound retries on the short backoff — a photo/warranty lookup is one
+	// search + one small vision call, and sources improve over time.
+	window := s.cfg.BackoffBase
 	if window == 0 {
-		window = 720 * time.Hour
+		window = 24 * time.Hour
 	}
 	return time.Since(d.CreatedAt) < window
 }
@@ -288,12 +381,23 @@ func hasOfficialPhoto(detail *homebox.EntityOut) bool {
 	return false
 }
 
-// subjectOf is the search identity: manufacturer+model, else manufacturer+name.
+// subjectOf is the search identity: manufacturer + model + name with
+// duplicate words removed. The descriptive name matters — "Anker A3330" says
+// nothing about what the product looks like; "Anker A3330 Soundcore C30i"
+// does (observed live: model-only photo searches found nothing usable).
 func subjectOf(detail *homebox.EntityOut) string {
-	if strings.TrimSpace(detail.ModelNumber) != "" {
-		return strings.TrimSpace(detail.Manufacturer + " " + detail.ModelNumber)
+	seen := map[string]bool{}
+	var out []string
+	for _, part := range []string{detail.Manufacturer, detail.ModelNumber, detail.Name} {
+		for _, w := range strings.Fields(part) {
+			k := strings.ToLower(w)
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, w)
+			}
+		}
 	}
-	return strings.TrimSpace(detail.Manufacturer + " " + detail.Name)
+	return strings.Join(out, " ")
 }
 
 // srcRef renders a source as a labeled link when it is a URL, else verbatim.

@@ -44,7 +44,16 @@ func Run(ctx context.Context, sc *Scanner, specs Specs) error {
 	}
 
 	if specs.ScanNew != "" {
-		if _, err := c.AddFunc(specs.ScanNew, guard("scan", func(ctx context.Context) error { return sc.Scan(ctx, false) })); err != nil {
+		// The cron scan also sweeps: attachment deletions don't bump
+		// updatedAt, so only a per-item fetch (Sweep) notices removed
+		// manuals/photos and turns them into rejection labels + re-fetches.
+		// The 30s change-poll scan below stays diff-only (cheap).
+		if _, err := c.AddFunc(specs.ScanNew, guard("scan", func(ctx context.Context) error {
+			if err := sc.Scan(ctx, false); err != nil {
+				return err
+			}
+			return sc.Sweep(ctx)
+		})); err != nil {
 			return err
 		}
 	}

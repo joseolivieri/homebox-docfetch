@@ -38,6 +38,15 @@ func MDLink(label, url string) string {
 var mdTarget = regexp.MustCompile(`\]\((https?://[^)\s]+)\)`)
 var bareURL = regexp.MustCompile(`https?://\S+`)
 
+// Target extracts the URL from a value that is either a markdown link
+// ("[pdf](https://…)") or a bare URL. "" when neither.
+func Target(s string) string {
+	if m := mdTarget.FindStringSubmatch(s); m != nil {
+		return m[1]
+	}
+	return strings.TrimRight(bareURL.FindString(s), ".,;")
+}
+
 // RejectedURLs extracts doc URLs from "rejected" log lines inside the docfetch
 // block. These lines are written by the ntfy Reject button (via the portal) or
 // by hand, and act as durable negative labels: the scanner must never propose
