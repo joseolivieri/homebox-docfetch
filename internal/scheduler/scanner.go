@@ -7,6 +7,7 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -215,6 +216,11 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		return s.store.Upsert(ctx, base)
 	}
 
+	// Rejected URLs (ntfy Reject button / hand-written "rejected" notes lines)
+	// are permanent negative labels: ingest new ones into the ledger and strip
+	// them from this run's candidates so they are never proposed again.
+	rejected := s.rejectedSet(ctx, detail)
+
 	res, err := s.disc.Discover(ctx, item)
 	if err != nil {
 		return err
@@ -223,6 +229,7 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	if res == nil {
 		res = &discovery.Result{}
 	}
+	filterRejected(res, rejected)
 
 	switch {
 	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
@@ -243,8 +250,107 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		return s.reviewGate(ctx, detail, res, base)
 	default:
 		log.Printf("no manual found for %q (candidates=%d)", detail.Name, len(res.Candidates))
+		s.recordDecision(ctx, detail, res, "notfound", "")
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
+	}
+}
+
+// rejectedSet unions ledger rejections with "rejected" lines in the entity's
+// notes block (the reject button writes there — Homebox is the shared bus
+// between the portal and scheduler processes), ingesting new notes rejections
+// as ledger labels on first sight.
+func (s *Scanner) rejectedSet(ctx context.Context, detail *homebox.EntityOut) map[string]bool {
+	set, err := s.store.RejectedURLs(ctx, detail.ID, s.cfg.DocType)
+	if err != nil {
+		log.Printf("ledger rejected urls %s: %v", detail.ID, err)
+		set = map[string]bool{}
+	}
+	for _, u := range notes.RejectedURLs(detail.Notes) {
+		if set[u] {
+			continue
+		}
+		if n, err := s.store.LabelDecisions(ctx, detail.ID, u, store.LabelRejected, "ntfy"); err != nil {
+			log.Printf("ledger label %s: %v", detail.ID, err)
+		} else if n == 0 {
+			// No proposal row to label (hand-written rejection): synthesize one so
+			// the URL still counts as a negative and stays filtered.
+			_ = s.store.RecordDecision(ctx, &store.Decision{
+				EntityID: detail.ID, EntityName: detail.Name, DocClass: s.cfg.DocType,
+				ChosenURL: u, Outcome: "review", Label: store.LabelRejected, LabelSrc: "manual",
+			})
+		}
+		set[u] = true
+	}
+	return set
+}
+
+// filterRejected strips rejected URLs from a discovery result in place.
+func filterRejected(res *discovery.Result, rejected map[string]bool) {
+	if res == nil || len(rejected) == 0 {
+		return
+	}
+	if res.Best != nil && rejected[res.Best.URL] {
+		res.Best = nil
+	}
+	if res.BestHTML != nil && rejected[res.BestHTML.URL] {
+		res.BestHTML = nil
+	}
+	kept := res.Candidates[:0]
+	for _, c := range res.Candidates {
+		if !rejected[c.URL] {
+			kept = append(kept, c)
+		}
+	}
+	res.Candidates = kept
+}
+
+// candLite is the compact per-candidate shape stored in the ledger.
+type candLite struct {
+	URL      string  `json:"u"`
+	Score    float64 `json:"s"`
+	Official bool    `json:"o,omitempty"`
+	PDF      bool    `json:"p,omitempty"`
+	HTML     bool    `json:"h,omitempty"`
+	Model    bool    `json:"m,omitempty"`
+}
+
+// recordDecision appends the pipeline's verdict for this entity to the
+// learning ledger. chosenURL overrides the result's pick (fallback downloads
+// can land on a different candidate than res.Best).
+func (s *Scanner) recordDecision(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, outcome, chosenURL string) {
+	d := &store.Decision{
+		EntityID:   detail.ID,
+		EntityName: detail.Name,
+		DocClass:   s.cfg.DocType,
+		Outcome:    outcome,
+		ChosenURL:  chosenURL,
+	}
+	if res != nil {
+		d.Stage = res.Stage
+		d.Confidence = res.Confidence
+		d.UsedLLM = res.UsedLLM
+		if d.ChosenURL == "" {
+			if res.Best != nil {
+				d.ChosenURL = res.Best.URL
+			} else if res.BestHTML != nil {
+				d.ChosenURL = res.BestHTML.URL
+			}
+		}
+		lite := make([]candLite, 0, len(res.Candidates))
+		for i, c := range res.Candidates {
+			if i >= 12 {
+				break
+			}
+			lite = append(lite, candLite{URL: c.URL, Score: c.Score, Official: c.Official,
+				PDF: c.IsPDF, HTML: c.IsHTML, Model: c.ModelMatch})
+		}
+		if b, err := json.Marshal(lite); err == nil {
+			d.Candidates = string(b)
+		}
+	}
+	if err := s.store.RecordDecision(ctx, d); err != nil {
+		log.Printf("ledger record %s: %v", detail.ID, err)
 	}
 }
 
@@ -257,16 +363,16 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 		return err
 	}
 	upd := fullUpdateFrom(fresh)
-	var lines []string
+	var links []string
 	docURL := ""
 	if res.Best != nil && res.Best.IsPDF {
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", res.Best.URL)
-		lines = append(lines, notes.Line("manual linked (remote pdf) — "+res.Best.URL))
+		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", notes.MDLink("pdf", res.Best.URL))
+		links = append(links, notes.MDLink("pdf", res.Best.URL))
 		docURL = res.Best.URL
 	}
 	if res.BestHTML != nil {
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", res.BestHTML.URL)
-		lines = append(lines, notes.Line("manual linked (web) — "+res.BestHTML.URL))
+		upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", notes.MDLink("web", res.BestHTML.URL))
+		links = append(links, notes.MDLink("web", res.BestHTML.URL))
 		if docURL == "" {
 			docURL = res.BestHTML.URL
 		}
@@ -274,12 +380,13 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 	if docURL == "" {
 		return s.reviewGate(ctx, detail, res, base)
 	}
-	n := notes.Append(fresh.Notes, lines...)
+	n := notes.Append(fresh.Notes, notes.Line("manual linked "+strings.Join(links, " ")))
 	upd.Notes = &n
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		return err
 	}
 	log.Printf("manual linked for %q — %s", detail.Name, docURL)
+	s.recordDecision(ctx, detail, res, "linked", docURL)
 	t := time.Now()
 	base.Status = store.StatusAttached
 	base.DocURL = docURL
@@ -336,63 +443,56 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *di
 	// in the Homebox UI; one URL per field — two don't parse).
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		n := notes.Append(updated.Notes, notes.Line(fmt.Sprintf("manual attached — %s", best.URL)))
+		line := fmt.Sprintf("manual attached (%.2f) %s", res.Confidence, notes.MDLink("pdf", best.URL))
+		n := notes.Append(updated.Notes, notes.Line(line))
 		upd.Notes = &n
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", best.URL)
+		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", notes.MDLink("pdf", best.URL))
 		if res.BestHTML != nil && res.BestHTML.Official {
-			upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", res.BestHTML.URL)
+			upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", notes.MDLink("web", res.BestHTML.URL))
 		}
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("attach note put %s: %v", detail.ID, err)
 		}
 	}
+	s.recordDecision(ctx, detail, res, "attached", best.URL)
 	t := time.Now()
 	base.Status = store.StatusAttached
 	base.LastAttached = &t
 	return s.store.Upsert(ctx, base)
 }
 
-// reviewGate tags the entity unverified and sends one ntfy prompt.
+// reviewGate tags the entity unverified and sends one ntfy prompt with
+// one-tap Attach / Reject actions. Reject writes a "rejected" notes line via
+// the portal, which the next scan ingests as a permanent negative label.
 func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, base *store.Record) error {
+	if res.Best == nil {
+		// Nothing left to review (every candidate failed or was rejected).
+		s.recordDecision(ctx, detail, res, "notfound", "")
+		base.Status = store.StatusNotFound
+		return s.store.Upsert(ctx, base)
+	}
 	if err := s.tagUnverified(ctx, detail); err != nil {
 		return err
 	}
 	msg := notify.Message{
 		Title: "docfetch: review a manual",
-		Body:  fmt.Sprintf("%s — candidate found (confidence %.0f%%). Tap to view; Attach to accept.", detail.Name, res.Confidence*100),
+		Body:  fmt.Sprintf("%s — candidate found (confidence %.0f%%). Tap to view.", detail.Name, res.Confidence*100),
 		Click: res.Best.URL,
 		Tags:  []string{"page_facing_up"},
 	}
 	if s.cfg.PortalURL != "" && s.cfg.SignKey != "" {
 		msg.Actions = []string{
-			"http, Attach manual, " + ApproveURL(s.cfg.PortalURL, detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
+			"http, Attach, " + ActionURL(s.cfg.PortalURL, "approve", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
+			"http, Reject, " + ActionURL(s.cfg.PortalURL, "reject", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST",
 		}
 	}
 	if err := s.ntfy.Send(ctx, msg); err != nil {
 		return err
 	}
+	s.recordDecision(ctx, detail, res, "review", res.Best.URL)
 	base.DocURL = res.Best.URL
 	base.Status = store.StatusPendingReview
 	return s.store.Upsert(ctx, base)
-}
-
-// Reconcile sends a weekly digest of how many items still carry the unverified tag.
-func (s *Scanner) Reconcile(ctx context.Context) error {
-	if err := s.bootstrap(ctx); err != nil {
-		return err
-	}
-	list, err := s.api.ListEntities(ctx, 1, 1, []string{s.unverifiedTagID})
-	if err != nil {
-		return err
-	}
-	if list.Total == 0 {
-		return nil
-	}
-	return s.ntfy.Send(ctx, notify.Message{
-		Title: "docfetch: items awaiting review",
-		Body:  fmt.Sprintf("%d item(s) tagged %s need a room/doc decision.", list.Total, s.cfg.UnverifiedTag),
-		Tags:  []string{"clipboard"},
-	})
 }
 
 // --- helpers ---

@@ -106,7 +106,23 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		upd.WarrantyDetails = &d
 	}
 
-	note := notes.Append("", notes.Line("created via photo intake"))
+	noteLines := []string{notes.Line("created via photo intake")}
+	if s.cfg.Notes.AuditLog {
+		// Terse provenance for everything the intake attaches/derives.
+		var got []string
+		for _, f := range []string{"sticker", "receipt", "product", "warranty"} {
+			if r.MultipartForm != nil && len(r.MultipartForm.File[f]) > 0 {
+				got = append(got, f)
+			}
+		}
+		if len(got) > 0 {
+			noteLines = append(noteLines, notes.Line("photos: "+strings.Join(got, ", ")))
+		}
+		if warrantyMonths > 0 {
+			noteLines = append(noteLines, notes.Line(fmt.Sprintf("warranty %dmo (from photo)", warrantyMonths)))
+		}
+	}
+	note := notes.Append("", noteLines...)
 	upd.Notes = &note
 	if _, err := s.hb.PutEntity(ctx, ent.ID, upd); err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("metadata put: %w", err))
@@ -235,9 +251,9 @@ func (s *Server) fetchOfficialPhoto(ctx context.Context, detail *homebox.EntityO
 	upd := fullUpdate(fresh)
 	ref := ""
 	if personal != nil {
-		ref = ", matched to your photo"
+		ref = ", matched"
 	}
-	n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("official photo (conf %.2f%s) — %s", conf, ref, chosen.Src)))
+	n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("photo (%.2f%s) %s", conf, ref, notes.MDLink("src", chosen.Src))))
 	upd.Notes = &n
 	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
 		log.Printf("postIntake %s: photo note put: %v", detail.ID, err)
@@ -274,6 +290,10 @@ func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut
 			d += "; claims: " + est.ClaimsURL
 		}
 		upd.WarrantyDetails = &d
+		if s.cfg.Notes.AuditLog {
+			n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("warranty lifetime (%.2f) %s", est.Confidence, notes.MDLink("src", est.Source))))
+			upd.Notes = &n
+		}
 		if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("warranty lifetime put %s: %v", detail.ID, err)
 		} else {
@@ -300,15 +320,22 @@ func (s *Server) estimateWarranty(ctx context.Context, detail *homebox.EntityOut
 	if est.ClaimsURL != "" {
 		claims = "; claims: " + est.ClaimsURL
 	}
+	auditLine := ""
 	if est.Confidence >= 0.85 && est.Source != "" {
 		e := expiry.Format("2006-01-02")
 		upd.WarrantyExpires = &e
 		d := strings.TrimSpace(fresh.WarrantyDetails + "\n" + strconv.Itoa(est.Months) + "mo standard warranty per " + est.Source + claims)
 		upd.WarrantyDetails = &d
+		auditLine = fmt.Sprintf("warranty %dmo (%.2f) %s", est.Months, est.Confidence, notes.MDLink("src", est.Source))
 	} else {
 		// Uncertain: estimate note only, no hard expiry (decisions.md D11).
 		d := strings.TrimSpace(fresh.WarrantyDetails + fmt.Sprintf("\nest. %dmo from %s (unverified)%s", est.Months, purchase.Format("2006-01-02"), claims))
 		upd.WarrantyDetails = &d
+		auditLine = fmt.Sprintf("warranty est %dmo (%.2f)", est.Months, est.Confidence)
+	}
+	if s.cfg.Notes.AuditLog && auditLine != "" {
+		n := notes.Append(fresh.Notes, notes.Line(auditLine))
+		upd.Notes = &n
 	}
 	if _, err := s.hb.PutEntity(ctx, detail.ID, upd); err != nil {
 		log.Printf("warranty put %s: %v", detail.ID, err)

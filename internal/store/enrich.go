@@ -68,11 +68,13 @@ FROM enrichments WHERE entity_id=?`, entityID)
 	return out, rows.Err()
 }
 
-// AlreadyEnriched reports whether (entity, field) has a non-superseded audit row.
+// AlreadyEnriched reports whether (entity, field) has any audit row.
+// Superseded rows count too: once a human has changed (or cleared) a value we
+// wrote, the machine must never re-fill that field.
 func (s *Store) AlreadyEnriched(ctx context.Context, entityID, field string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM enrichments WHERE entity_id=? AND field=? AND superseded=0`,
+		`SELECT COUNT(1) FROM enrichments WHERE entity_id=? AND field=?`,
 		entityID, field).Scan(&n)
 	return n > 0, err
 }

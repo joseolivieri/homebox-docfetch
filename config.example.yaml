@@ -78,4 +78,11 @@ portal:
   photo_min_confidence: 0.7        # official photo attaches only at/above this; below -> none
   public_url: https://docfetch.ingress-1.jentaculum.net   # enables ntfy approve buttons
 
+# Machine-written log block inside each entity's notes field.
+notes:
+  # Opt-in: log a terse line for EVERY derived write (intake photos, official
+  # photo, warranty, metadata) with confidence scores. Off = only doc
+  # attach/link events are logged. URLs always render as short markdown links.
+  audit_log: true
+
 state_db: /data/docfetch.db

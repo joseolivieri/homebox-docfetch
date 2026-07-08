@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
 )
 
 // Searcher provides raw search results (satisfied by discovery.Engine via a
@@ -317,7 +318,7 @@ func Note(frs []FieldResult) string {
 		if f.Action != ActionWrite {
 			continue
 		}
-		fields = append(fields, fmt.Sprintf("%s=%q(%.2f)", f.Field, f.Value, f.Confidence))
+		fields = append(fields, fmt.Sprintf("%s=%s (%.2f)", f.Field, f.Value, f.Confidence))
 		if ev == "" && len(f.Evidence) > 0 {
 			ev = f.Evidence[0]
 		}
@@ -325,5 +326,9 @@ func Note(frs []FieldResult) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	return "auto-filled " + strings.Join(fields, ", ") + " — " + ev
+	line := "meta " + strings.Join(fields, ", ")
+	if ev != "" {
+		line += " " + notes.MDLink("src", ev)
+	}
+	return line
 }

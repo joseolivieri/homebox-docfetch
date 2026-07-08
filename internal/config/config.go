@@ -30,7 +30,16 @@ type Config struct {
 	Notify     Notify     `yaml:"notify"`
 	Portal     Portal     `yaml:"portal"`
 	Vision     Vision     `yaml:"vision"`
+	Notes      Notes      `yaml:"notes"`
 	StateDB    string     `yaml:"state_db"`
+}
+
+// Notes tunes the machine-written log block in each entity's notes field.
+type Notes struct {
+	// AuditLog opt-in: log a terse line for EVERY derived write (intake photos,
+	// official photo, warranty, metadata, docs) with confidence scores. Off =
+	// only doc attach/link events are logged.
+	AuditLog bool `yaml:"audit_log"`
 }
 
 // Enrich configures metadata auto-completion (Phase 1.5). Fill-only by design.

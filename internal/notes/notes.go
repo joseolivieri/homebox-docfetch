@@ -13,6 +13,7 @@
 package notes
 
 import (
+	"regexp"
 	"strings"
 	"time"
 )
@@ -26,6 +27,40 @@ const (
 // Line formats one compact log entry: "- YYYY-MM-DD <text>".
 func Line(text string) string {
 	return "- " + time.Now().Format("2006-01-02") + " " + strings.TrimSpace(text)
+}
+
+// MDLink renders a short-labeled markdown link — raw URLs are noisy in the
+// Homebox UI, so every logged/linked URL gets a label like [pdf](…) or [web](…).
+func MDLink(label, url string) string {
+	return "[" + label + "](" + url + ")"
+}
+
+var mdTarget = regexp.MustCompile(`\]\((https?://[^)\s]+)\)`)
+var bareURL = regexp.MustCompile(`https?://\S+`)
+
+// RejectedURLs extracts doc URLs from "rejected" log lines inside the docfetch
+// block. These lines are written by the ntfy Reject button (via the portal) or
+// by hand, and act as durable negative labels: the scanner must never propose
+// these URLs again. Both [label](url) and bare-URL forms are recognized.
+func RejectedURLs(existing string) []string {
+	bi := strings.Index(existing, Begin)
+	ei := strings.Index(existing, End)
+	if bi < 0 || ei <= bi {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(existing[bi:ei], "\n") {
+		l := strings.TrimSpace(line)
+		if !strings.HasPrefix(l, "-") || !strings.Contains(l, "rejected") {
+			continue
+		}
+		if m := mdTarget.FindStringSubmatch(l); m != nil {
+			out = append(out, m[1])
+		} else if u := bareURL.FindString(l); u != "" {
+			out = append(out, strings.TrimRight(u, ".,;"))
+		}
+	}
+	return out
 }
 
 // Append inserts log lines into the docfetch block of an existing notes value,

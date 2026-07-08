@@ -32,6 +32,31 @@ func TestAppendPreservesUserTextAboveAndBelow(t *testing.T) {
 	}
 }
 
+func TestRejectedURLs(t *testing.T) {
+	body := Append("", Line("manual attached (0.90) "+MDLink("pdf", "https://ok.com/a.pdf")),
+		Line("rejected "+MDLink("link", "https://bad.com/wrong.pdf")),
+		Line("rejected https://bare.com/x.pdf"))
+	got := RejectedURLs(body)
+	want := map[string]bool{"https://bad.com/wrong.pdf": true, "https://bare.com/x.pdf": true}
+	if len(got) != 2 {
+		t.Fatalf("got %v", got)
+	}
+	for _, u := range got {
+		if !want[u] {
+			t.Fatalf("unexpected url %q in %v", u, got)
+		}
+	}
+	// The attached (non-rejected) line must not leak in.
+	for _, u := range got {
+		if u == "https://ok.com/a.pdf" {
+			t.Fatal("attached url misread as rejected")
+		}
+	}
+	if RejectedURLs("no block here") != nil {
+		t.Fatal("expected nil without a docfetch block")
+	}
+}
+
 func TestAppendToUserOnlyNotes(t *testing.T) {
 	out := Append("just my own text", Line("manual attached"))
 	if !strings.HasPrefix(out, "just my own text") {

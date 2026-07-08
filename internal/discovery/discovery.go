@@ -66,6 +66,7 @@ type Result struct {
 	BestHTML   *Candidate // best official/model-matching HTML manual page (link fallback)
 	Confidence float64
 	UsedLLM    bool
+	Stage      string // pipeline stage that produced the pick ("" = combined final pick)
 	Candidates []Candidate
 }
 
@@ -171,6 +172,7 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 		res := e.pick(ctx, it, cands, requireModel)
 		if res.Best != nil && res.Confidence >= e.opt.StopConfidence {
 			log.Printf("pipeline stage %q produced confident pick (%.2f)", stage, res.Confidence)
+			res.Stage = stage
 			res.Candidates = append(cands, all...)
 			res.BestHTML = bestHTML(res.Candidates)
 			return res, nil

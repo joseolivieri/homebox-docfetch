@@ -135,8 +135,31 @@ portal:                            # Phase 2 (dormant until then)
   intake_photos: [sticker, receipt]
   warranty_estimate: true
 
+notes:
+  audit_log: false                 # opt-in: terse dated line per derived write (photos/warranty/meta)
+                                   # with confidence; URLs always render as [pdf](…)/[web](…)/[src](…)
+
 state_db: /data/docfetch.db
 ```
+
+### Learning feedback loop (Phase A)
+
+Every doc-pipeline verdict lands in the scheduler's SQLite `decisions` table
+(entity, `doc_class`, stage, chosen URL, confidence, compact candidate-set
+JSON, outcome `attached|linked|review|notfound`). Labels arrive asynchronously:
+
+- **rejected** — ntfy Reject button (portal `/api/reject`, verb-scoped HMAC)
+  writes `rejected [link](url)` into the entity's docfetch notes block; the
+  scheduler ingests it on the next scan and permanently filters the URL from
+  candidates. Hand-written `rejected` lines label the same way (src `manual`).
+- **overridden / rejected(src=override)** — weekly reconcile diffs Homebox
+  against what was written: a removed manual → rejected + re-search; a changed
+  machine-filled metadata value → enrichment row `superseded` (never refilled).
+- **confirmed (src=age)** — an attachment surviving 30 days untouched.
+
+The weekly digest includes a 7-day outcome/label snapshot. The ledger is the
+dataset for the next phases: eval golden set, learned domain priors, and
+threshold calibration.
 
 ## 6. Homebox API reference (AUTHORITATIVE — verified against live swagger 2026-07-06)
 
