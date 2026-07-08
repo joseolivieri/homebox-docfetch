@@ -8,6 +8,9 @@ photo-intake portal that creates items from a model-label and/or receipt photo.
 This directory holds the service source, its container/compose, and its design docs. The Ansible
 deployment role lives separately at `ansible/roles/docfetch/` (follows the `homebox` role pattern).
 
+**New here? Start with [`docs/how-it-works.md`](docs/how-it-works.md)** — a plain-language
+walkthrough of the whole pipeline (intake, enrichment, manual discovery, review gate, learning loop).
+
 ## Agent read order
 
 Read these before touching code. They are the source of truth; do not re-derive facts from
