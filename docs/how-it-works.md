@@ -41,9 +41,11 @@ Open the portal, and you get a four-photo grid:
 
 Take whichever ones you have (any subset works), and an AI vision model reads
 them: manufacturer, model number, serial number, purchase details, warranty
-duration. You get a confirmation screen where you can correct anything, pick a
-quantity, and optionally choose which room the item lives in. Tap create, done
-— usually under a minute in total.
+duration. Any **QR codes** on the labels are decoded too — right on the server,
+no network needed — and if one points to a support page, it shows up on the
+confirmation screen as a link you can keep or discard. You can also correct
+any field, pick a quantity, and optionally choose which room the item lives
+in. Tap create, done — usually under a minute in total.
 
 Behind the scenes the portal then creates the item in Homebox with everything
 you confirmed and attaches all the photos you took (receipt as a receipt,
@@ -87,6 +89,10 @@ search into an exact one.
 The scanner works through sources in order of trustworthiness, stopping as
 soon as one produces a confident match:
 
+0. **The QR code you photographed.** If intake decoded a support link off the
+   product's own label, that's the strongest evidence there is — the maker
+   printed it on this exact product. The scanner follows it and harvests any
+   manuals from the target page, usually skipping all searching entirely.
 1. **The manufacturer's own site.** First figure out the official domain
    (anker.com, lg.com), then search only there, open the support pages, and
    collect the PDF links they point to. A manual from the maker's own support

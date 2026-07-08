@@ -156,8 +156,15 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Local QR decode (no network): manufacturer-printed support links from
+	// the labels ride along to the confirm screen.
+	resp := struct {
+		*llm.IntakeExtraction
+		QRUrls []string `json:"qrUrls"`
+	}{ex, decodeQRs(images)}
+
 	// Stateless: the client re-sends the photos with /api/create for attaching.
-	writeJSON(w, http.StatusOK, ex)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // formImage reads one image field from a parsed multipart form.

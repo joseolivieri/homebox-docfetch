@@ -74,6 +74,9 @@ phone -> portal (Tailscale-only PWA) -> capture up to 4 photos (sticker/receipt/
   -> confirm screen: user reviews/corrects fields; quantity; optional location pick
   -> POST create entity (tagIds=unverified+provenance, optional parentId)
   -> PUT metadata (identity + purchase + photo-read warranty)
+  -> local QR decode over the photos (pure Go, no network): http(s) support links
+     from manufacturer-printed codes -> user-confirmable on the confirm screen
+     -> stored as "- qr [link](url)" notes lines + "Support (QR)" custom field
   -> attach the intake photos (receipt/warranty/product-personal[primary]/sticker)
   -> DONE. No web calls. The curation stage takes over via change-poll (~30s).
 ```

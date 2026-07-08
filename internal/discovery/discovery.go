@@ -24,6 +24,10 @@ type Item struct {
 	Manufacturer string
 	ModelNumber  string
 	Name         string
+	// HintURLs are manufacturer-printed support links (QR codes decoded from
+	// the item's physical labels at intake). The "qr" pipeline stage follows
+	// them before any searching — strongest provenance available.
+	HintURLs []string
 }
 
 func (i Item) desc() string {
@@ -111,7 +115,7 @@ func NewEngine(opt Options, reranker Reranker) *Engine {
 		opt.MaxSnippetChars = 150
 	}
 	if len(opt.Pipeline) == 0 {
-		opt.Pipeline = []string{"brand-site", "web-pdf", "web-html"}
+		opt.Pipeline = []string{"qr", "brand-site", "web-pdf", "web-html"}
 	}
 	if opt.StopConfidence == 0 {
 		opt.StopConfidence = 0.7
@@ -157,6 +161,8 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 	for _, stage := range e.opt.Pipeline {
 		var cands []Candidate
 		switch stage {
+		case "qr":
+			cands = e.qrCandidates(ctx, it)
 		case "brand-site":
 			cands = e.brandSiteCandidates(ctx, it)
 		case "web-pdf":

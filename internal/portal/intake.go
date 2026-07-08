@@ -106,6 +106,19 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	noteLines := []string{notes.Line("created via photo intake")}
+	// QR support links (decoded locally at extract, confirmed by the user).
+	// One "qr" notes line each — the scanner's qr pipeline stage reads these —
+	// plus a visible custom field for the first one.
+	var qrURLs []string
+	for _, u := range r.Form["qrUrl"] {
+		if u = strings.TrimSpace(u); u != "" && usableQRURL(u) {
+			qrURLs = append(qrURLs, u)
+			noteLines = append(noteLines, notes.Line("qr "+notes.MDLink("link", u)))
+		}
+	}
+	if len(qrURLs) > 0 {
+		upd.Fields = homebox.UpsertField(upd.Fields, "Support (QR)", notes.MDLink("qr", qrURLs[0]))
+	}
 	if s.cfg.Notes.AuditLog {
 		// Terse provenance for everything the intake attaches/derives.
 		var got []string

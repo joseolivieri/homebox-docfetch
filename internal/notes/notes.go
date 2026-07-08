@@ -50,8 +50,15 @@ func RejectedURLs(existing string) []string { return markedURLs(existing, "rejec
 // attaches on its next pass (~30s via the change-poll).
 func ApprovedURLs(existing string) []string { return markedURLs(existing, "approved") }
 
-// markedURLs scans docfetch-block log lines containing the keyword and
-// returns their URL targets.
+// QRURLs extracts URLs from "qr" log lines — support links decoded from QR
+// codes on the item's physical labels at intake. Manufacturer-printed
+// provenance: the scanner's "qr" pipeline stage tries these before searching.
+func QRURLs(existing string) []string { return markedURLs(existing, "qr") }
+
+// markedURLs scans docfetch-block log lines whose first word (after the date)
+// is the keyword and returns their URL targets. First-token matching, not
+// substring: "qr" must not match URLs like qr.anker.com on other lines, and
+// "approved" must not match "manual attached via approve".
 func markedURLs(existing, keyword string) []string {
 	bi := strings.Index(existing, Begin)
 	ei := strings.Index(existing, End)
@@ -61,7 +68,19 @@ func markedURLs(existing, keyword string) []string {
 	var out []string
 	for _, line := range strings.Split(existing[bi:ei], "\n") {
 		l := strings.TrimSpace(line)
-		if !strings.HasPrefix(l, "-") || !strings.Contains(l, keyword) {
+		if !strings.HasPrefix(l, "-") {
+			continue
+		}
+		f := strings.Fields(l)
+		// Expected shape: "- YYYY-MM-DD <keyword> ..."; tolerate a missing
+		// date for hand-written lines ("- rejected <url>").
+		kw := ""
+		if len(f) >= 3 && dateLike(f[1]) {
+			kw = f[2]
+		} else if len(f) >= 2 {
+			kw = f[1]
+		}
+		if kw != keyword {
 			continue
 		}
 		if m := mdTarget.FindStringSubmatch(l); m != nil {
@@ -71,6 +90,10 @@ func markedURLs(existing, keyword string) []string {
 		}
 	}
 	return out
+}
+
+func dateLike(s string) bool {
+	return len(s) == 10 && s[4] == '-' && s[7] == '-'
 }
 
 // Append inserts log lines into the docfetch block of an existing notes value,

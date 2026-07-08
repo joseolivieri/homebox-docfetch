@@ -244,7 +244,14 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 		return s.attachApproved(ctx, detail, approved[len(approved)-1], base)
 	}
 
-	item := discovery.Item{Manufacturer: detail.Manufacturer, ModelNumber: detail.ModelNumber, Name: detail.Name}
+	item := discovery.Item{
+		Manufacturer: detail.Manufacturer,
+		ModelNumber:  detail.ModelNumber,
+		Name:         detail.Name,
+		// Label QR links recorded at intake (or hand-added "- qr <url>" lines):
+		// the qr pipeline stage follows these before any searching.
+		HintURLs: notes.QRURLs(detail.Notes),
+	}
 	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" && strings.TrimSpace(item.Name) == "" {
 		// Truly nothing to search on.
 		log.Printf("skip %q — no searchable identity", detail.Name)

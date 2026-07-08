@@ -64,10 +64,11 @@ curation:
                                    # anker.com/nz/…) are deprioritized in docs, photos,
                                    # and warranty. Defaults to "us" when language is en.
     # Source priority for manuals. Stops at the first stage with a confident pick.
-    #   brand-site: official-domain search + support-page PDF harvesting (best source)
+    #   qr:         label QR links decoded at intake (manufacturer-printed; no search)
+    #   brand-site: official-domain search + support-page PDF harvesting
     #   web-pdf:    general search with filetype:pdf
     #   web-html:   general search without filetype (HTML manual pages; linkable fallback)
-    pipeline: [brand-site, web-pdf, web-html]
+    pipeline: [qr, brand-site, web-pdf, web-html]
     # {subject} = manufacturer+model when a model is known, else manufacturer+name.
     queries:
       - "{subject} user manual filetype:pdf"

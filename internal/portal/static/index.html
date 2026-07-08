@@ -100,6 +100,10 @@
       <div><label>Claims URL</label><input id="c_warrantyClaimsUrl" type="url" placeholder="https://…"></div>
     </div>
     <label>Warranty notes</label><input id="c_warrantyDetails">
+    <div id="qrBox" style="display:none">
+      <label>QR links found on labels</label>
+      <div id="qrList"></div>
+    </div>
     <label>Location (optional)</label>
     <select id="c_location"><option value="">— unset —</option></select>
     <button class="primary" id="createBtn" onclick="createItem()">Add to Homebox</button>
@@ -183,6 +187,7 @@ async function extract() {
     $('c_warrantyMonths').value = j.warranty.durationMonths || '';
     $('c_warrantyClaimsUrl').value = j.warranty.claimsUrl || '';
     $('c_warrantyDetails').value = j.warranty.details || '';
+    renderQRs(j.qrUrls || []);
     $('confirm').style.display = 'block';
     $('confirm').scrollIntoView({behavior: 'smooth'});
   } catch (e) {
@@ -191,6 +196,24 @@ async function extract() {
     btn.disabled = false;
     btn.textContent = 'Read photos';
   }
+}
+
+// QR links decoded from the label photos: checked links are stored on the
+// item and the background pipeline tries them FIRST as manufacturer-printed
+// support sources.
+function renderQRs(urls) {
+  const box = $('qrBox'), list = $('qrList');
+  list.innerHTML = '';
+  if (!urls.length) { box.style.display = 'none'; return; }
+  for (const u of urls) {
+    const id = 'qr_' + list.children.length;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:.5rem;align-items:center;margin:.25rem 0;overflow:hidden';
+    row.innerHTML = `<input type="checkbox" id="${id}" value="${u.replace(/"/g, '&quot;')}" checked style="width:auto">` +
+      `<label for="${id}" style="margin:0;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${u}</label>`;
+    list.appendChild(row);
+  }
+  box.style.display = 'block';
 }
 
 async function createItem() {
@@ -204,6 +227,8 @@ async function createItem() {
                    'purchaseDate','purchasePrice','warrantyMonths','warrantyClaimsUrl','warrantyDetails'])
     fd.append(k, $('c_' + k).value.trim());
   fd.append('locationId', $('c_location').value);
+  // Confirmed QR links (decoded server-side from the labels, no network).
+  document.querySelectorAll('#qrList input:checked').forEach(cb => fd.append('qrUrl', cb.value));
   for (const s of ['sticker', 'receipt', 'product', 'warranty'])   // all photos attach to the item
     if (files[s]) fd.append(s, files[s]);
   try {
