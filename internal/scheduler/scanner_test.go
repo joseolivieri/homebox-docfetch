@@ -298,3 +298,37 @@ func TestHasDocByField(t *testing.T) {
 		t.Fatal("legacy manual attachment should satisfy hasDoc(manual)")
 	}
 }
+
+func TestReviewGateNotifiesOnce(t *testing.T) {
+	// Our own writes bump updatedAt and re-trigger scans; the review prompt for
+	// the SAME candidate URL must not repeat (observed live: one ntfy per poll
+	// tick until fixed).
+	ctx := context.Background()
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+	}
+	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/maybe.pdf"}, Confidence: 0.4}}
+	nt := &fakeNtfy{}
+	sc, st := newTestScanner(t, api, disc, nt)
+	defer st.Close()
+
+	if err := sc.Scan(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an updatedAt bump (our own tag PATCH / notes PUT) -> rescan.
+	api.list[0].UpdatedAt = api.list[0].UpdatedAt.Add(time.Minute)
+	if err := sc.Scan(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if nt.sent != 1 {
+		t.Fatalf("review prompt must fire once, got %d", nt.sent)
+	}
+	if api.patches != 1 {
+		t.Fatalf("unverified tag must be patched once, got %d", api.patches)
+	}
+	rec, _ := st.Get(ctx, "e1")
+	if rec.Status != store.StatusPendingReview {
+		t.Fatalf("expected pending_review, got %s", rec.Status)
+	}
+}

@@ -646,7 +646,7 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 	return s.store.Upsert(ctx, base)
 }
 
-// reviewGate tags the entity unverified and sends one ntfy prompt with
+// reviewGate tags the entity unverified and sends ONE ntfy prompt with
 // one-tap Attach / Reject actions. Reject writes a "rejected" notes line via
 // the portal, which the next scan ingests as a permanent negative label.
 func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, base *store.Record) error {
@@ -657,12 +657,27 @@ func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}
+	// Already prompted for this exact URL — do not notify again. (Our own
+	// writes bump updatedAt and re-trigger the change-poll; without this
+	// dedupe the review prompt would repeat every poll tick.)
+	if prev, _ := s.store.Get(ctx, detail.ID); prev != nil &&
+		prev.Status == store.StatusPendingReview && prev.DocURL == res.Best.URL {
+		base.DocURL = prev.DocURL
+		base.Status = store.StatusPendingReview
+		return s.store.Upsert(ctx, base)
+	}
 	if err := s.tagUnverified(ctx, detail); err != nil {
 		return err
 	}
+	// A model-gated pick reports confidence 0 — the honest reason is "could
+	// not confirm the model number", not "0%".
+	why := fmt.Sprintf("confidence %.0f%%", res.Confidence*100)
+	if res.Confidence == 0 {
+		why = "model number unconfirmed"
+	}
 	msg := notify.Message{
 		Title: "docfetch: review a manual",
-		Body:  fmt.Sprintf("%s — candidate found (confidence %.0f%%). Tap to view.", detail.Name, res.Confidence*100),
+		Body:  fmt.Sprintf("%s — candidate found (%s). Tap to view.", detail.Name, why),
 		Click: res.Best.URL,
 		Tags:  []string{"page_facing_up"},
 	}
@@ -713,9 +728,11 @@ func (s *Scanner) backoff(attempts int) time.Duration {
 func (s *Scanner) tagUnverified(ctx context.Context, detail *homebox.EntityOut) error {
 	ids := []string{s.unverifiedTagID}
 	for _, t := range detail.Tags {
-		if t.ID != s.unverifiedTagID {
-			ids = append(ids, t.ID)
+		if t.ID == s.unverifiedTagID {
+			return nil // already tagged — skip the PATCH (it bumps updatedAt,
+			// which would re-trigger the change-poll on our own write)
 		}
+		ids = append(ids, t.ID)
 	}
 	_, err := s.api.PatchEntity(ctx, detail.ID, homebox.EntityUpdate{ID: detail.ID, Name: detail.Name, TagIDs: ids})
 	return err
