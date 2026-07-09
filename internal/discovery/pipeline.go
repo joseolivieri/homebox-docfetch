@@ -77,13 +77,31 @@ func (e *Engine) brandSiteCandidates(ctx context.Context, it Item) []Candidate {
 		if !strings.Contains(strings.ToLower(r.URL), domain) {
 			continue
 		}
-		// Identity gate: a brand-domain page must reference THIS product
-		// before anything from it earns Official trust. Site search with a
-		// bare model number returns unrelated products from the same maker
-		// (observed live: the Anker Prime 96K page for a C30i query), and
-		// page-follow from a wrong page poisons everything downstream.
-		if !identityMatch(it, r.URL+" "+r.Title) {
-			continue
+		// Identity gate: a brand-domain page must reference THIS product in
+		// its URL/TITLE before anything from it earns full trust (ModelMatch +
+		// page-follow). Site search with a bare model number returns unrelated
+		// products from the same maker (observed live: the Anker Prime 96K
+		// page for a C30i query), and page-follow from a wrong page poisons
+		// everything downstream.
+		strongID := identityMatch(it, r.URL+" "+r.Title)
+		if !strongID {
+			// Weaker tier: the model only appears in the SNIPPET (manufacturer
+			// URLs often carry internal doc numbers — whirlpool.com's
+			// owners-manual-W10903644 never names the model in its URL). Keep
+			// it as an Official candidate WITHOUT ModelMatch: the model gate
+			// holds it back from blind attach, and skim-promote content-reads
+			// it before any third-party re-host gets a chance.
+			if !identityMatch(it, r.URL+" "+r.Title+" "+r.Content) {
+				continue
+			}
+			if strings.HasSuffix(strings.ToLower(r.URL), ".pdf") {
+				cands = append(cands, Candidate{
+					Title: r.Title, URL: r.URL,
+					Snippet:  truncate(r.Content, e.opt.MaxSnippetChars),
+					Official: true, Score: 3,
+				})
+			}
+			continue // no page-follow from weakly-matched pages
 		}
 		if strings.HasSuffix(strings.ToLower(r.URL), ".pdf") {
 			cands = append(cands, Candidate{

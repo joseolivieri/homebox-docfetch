@@ -436,6 +436,13 @@ var countryCodes = map[string]bool{
 	"my": true, "ae": true, "sa": true, "za": true, "ie": true,
 }
 
+// pseudoGenericTLDs are two-letter ccTLDs used generically by global sites —
+// never treated as country markers.
+var pseudoGenericTLDs = map[string]bool{
+	"io": true, "co": true, "ai": true, "tv": true, "me": true, "fm": true,
+	"gg": true, "sh": true, "cc": true, "ws": true, "to": true, "ly": true,
+}
+
 var countryWords = []string{"japan", "china", "korea", "europe", "deutschland", "vietnam", "france", "italia", "espana", "brasil", "australia"}
 
 // isCountrySpecificURL flags URLs that target a country market OTHER than the
@@ -452,15 +459,12 @@ func isCountrySpecificURL(raw, region string) bool {
 		return false
 	}
 	h := strings.ToLower(u.Host)
-	// ccTLD (last label). Multi-label public suffixes like .co.uk resolve to "uk".
+	// ccTLD (last label): ANY two-letter TLD other than the region is a
+	// country marker, minus the pseudo-generic set (.io/.co/…). The named map
+	// alone missed real markets (innovar.com.ve served a Whirlpool manual).
 	labels := strings.Split(h, ".")
-	if last := labels[len(labels)-1]; countryCodes[last] && last != region {
+	if last := labels[len(labels)-1]; len(last) == 2 && last != region && !pseudoGenericTLDs[last] {
 		return true
-	}
-	if len(labels) >= 2 { // .co.uk / .com.au style
-		if last := labels[len(labels)-1]; (last != region) && len(labels) >= 3 && (labels[len(labels)-2] == "co" || labels[len(labels)-2] == "com") && countryCodes[last] {
-			return true
-		}
 	}
 	for _, w := range countryWords {
 		if strings.Contains(h, w) {
@@ -496,10 +500,18 @@ func isBotBlockedDocHost(u string) bool {
 	return false
 }
 
-// isListingHostedDoc flags docs hosted on marketplace/listing CDNs.
+// isListingHostedDoc flags docs hosted on marketplace/listing CDNs and
+// anonymous-upload/doc-spam farms — re-hosted copies of real manuals with no
+// provenance (observed live: uploads.strikinglycdn.com with a gibberish
+// filename outranking the manufacturer's own PDF).
 func isListingHostedDoc(u string) bool {
 	l := strings.ToLower(u)
-	for _, bad := range []string{"media-amazon.com", "images-amazon.com", "ssl-images-amazon", "ebayimg", "aliexpress"} {
+	for _, bad := range []string{
+		"media-amazon.com", "images-amazon.com", "ssl-images-amazon", "ebayimg", "aliexpress",
+		"strikinglycdn", "docdroid", "pdfcoffee", "idoc.pub", "kupdf", "vdocuments",
+		"cupdf", "edoc.site", "dokumen.pub", "vsip.info", "fdocuments",
+		".weebly.com", ".wixsite.com", "godaddysites.com", "yumpu.com", "scribd",
+	} {
 		if strings.Contains(l, bad) {
 			return true
 		}

@@ -108,11 +108,15 @@ func (s *Scanner) sweepOverrides(ctx context.Context) {
 		}
 
 		// Doc removed by the user -> negative label + re-search without the URL.
+		// Status "new" + zeroed attempts: a human deletion is a fresh
+		// instruction to retry NOW, not another failed attempt — accumulated
+		// backoff must not defer the refetch by weeks.
 		if rec.DocURL != "" && !hasDoc(detail, s.cfg.manualClass()) {
 			if n, _ := s.store.LabelDecisions(ctx, rec.EntityID, rec.DocURL, store.LabelRejected, "override"); n > 0 {
 				log.Printf("override: %q removed manual %s — labeled rejected", detail.Name, rec.DocURL)
 			}
-			rec.Status = store.StatusNotFound
+			rec.Status = store.StatusNew
+			rec.Attempts = 0
 			rec.DocURL, rec.DocSHA256, rec.LastAttached = "", "", nil
 			_ = s.store.Upsert(ctx, rec)
 		} else if rec.LastAttached != nil && time.Since(*rec.LastAttached) > confirmAfter {

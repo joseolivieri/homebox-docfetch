@@ -62,9 +62,10 @@ func (f *fakeAPI) EnsureTag(_ context.Context, name string) (string, error) {
 }
 
 type fakeDisc struct {
-	res       *discovery.Result
-	body      []byte
-	discCalls int
+	res         *discovery.Result
+	body        []byte
+	discCalls   int
+	skimConfirm bool // Skim reports the model confirmed in document text
 }
 
 func (d *fakeDisc) Discover(_ context.Context, _ discovery.Item, _ []string) (*discovery.Result, error) {
@@ -78,7 +79,13 @@ func (d *fakeDisc) SelectClass(_ context.Context, _ discovery.Item, _ []discover
 	return d.res
 }
 func (d *fakeDisc) Download(_ context.Context, _ string, _ int64) ([]byte, error) { return d.body, nil }
-func (d *fakeDisc) VerifyPDF(_ context.Context, _ discovery.Item, _ []byte) bool  { return true }
+func (d *fakeDisc) Skim(_ context.Context, _ discovery.Item, data []byte, _ string) discovery.SkimVerdict {
+	return discovery.SkimVerdict{
+		IsPDF:          len(data) >= 4 && string(data[:4]) == "%PDF",
+		HasText:        true,
+		ModelConfirmed: d.skimConfirm,
+	}
+}
 
 type fakeNtfy struct{ sent int }
 
@@ -330,5 +337,39 @@ func TestReviewGateNotifiesOnce(t *testing.T) {
 	rec, _ := st.Get(ctx, "e1")
 	if rec.Status != store.StatusPendingReview {
 		t.Fatalf("expected pending_review, got %s", rec.Status)
+	}
+}
+
+func TestSkimPromotesGatedCandidate(t *testing.T) {
+	// Model-gated pick (confidence zeroed: model number absent from the URL)
+	// whose document TEXT names the model -> attach without human review.
+	// This is the Whirlpool case: URLs carry doc numbers (W10903644), the
+	// cover page carries the model.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Whirlpool", "WDF520PADM7")},
+	}
+	best := discovery.Candidate{URL: "http://w.com/owners-manual-W10903644.pdf", IsPDF: true, Score: 3}
+	disc := &fakeDisc{
+		res:         &discovery.Result{Best: &best, Candidates: []discovery.Candidate{best}, Confidence: 0},
+		body:        []byte("%PDF-1.4 use and care guide"),
+		skimConfirm: true,
+	}
+	nt := &fakeNtfy{}
+	sc, st := newTestScanner(t, api, disc, nt)
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("skim-confirmed doc must attach, uploads=%d", api.uploads)
+	}
+	if nt.sent != 0 {
+		t.Fatalf("no review prompt when skim confirms, sent=%d", nt.sent)
+	}
+	rec, _ := st.Get(context.Background(), "e1")
+	if rec.Status != store.StatusAttached {
+		t.Fatalf("expected attached, got %s", rec.Status)
 	}
 }

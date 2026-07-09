@@ -66,3 +66,26 @@ func TestAppendToUserOnlyNotes(t *testing.T) {
 		t.Fatal("line missing")
 	}
 }
+
+func TestAppendPrunesToBudget(t *testing.T) {
+	long := strings.Repeat("x", 60)
+	out := "user text stays\n\n" + Begin + "\n" + header + "\n" +
+		"- 2026-01-01 qr [link](https://keep.me/qr)\n" + End
+	// Push way past the budget with plain audit lines.
+	for i := 0; i < 30; i++ {
+		out = Append(out, Line("meta filler "+long))
+	}
+	if len(out) > MaxNotes {
+		t.Fatalf("notes exceed budget: %d > %d", len(out), MaxNotes)
+	}
+	if !strings.HasPrefix(out, "user text stays") {
+		t.Fatal("user text must survive pruning")
+	}
+	if len(QRURLs(out)) != 1 {
+		t.Fatalf("semantic qr line must survive audit pruning: %q", out)
+	}
+	// Newest audit line should still be present (oldest were dropped).
+	if !strings.Contains(out, "meta filler") {
+		t.Fatal("newest audit lines should remain")
+	}
+}

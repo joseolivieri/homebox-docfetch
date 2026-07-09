@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ type Discoverer interface {
 	Discover(ctx context.Context, it discovery.Item, want []string) (*discovery.Result, error)
 	SelectClass(ctx context.Context, it discovery.Item, cands []discovery.Candidate, class string) *discovery.Result
 	Download(ctx context.Context, url string, maxBytes int64) ([]byte, error)
-	VerifyPDF(ctx context.Context, it discovery.Item, data []byte) bool
+	Skim(ctx context.Context, it discovery.Item, data []byte, wantClass string) discovery.SkimVerdict
 }
 
 // DocClassCfg is one fetchable document class for the scanner: label, Homebox
@@ -330,22 +331,47 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 	return s.resolveManual(ctx, detail, item, cres, rec, base)
 }
 
+// skimConfidence is assigned when content skimming (not URL heuristics)
+// confirms the doc covers the item's model.
+const skimConfidence = 0.85
+
 // resolveManual runs the primary-class decision ladder: attach / official
-// page-follow / link / review-gate / notfound. Owns the store record.
+// page-follow / skim-promote / link / review-gate / notfound. Owns the store
+// record.
 func (s *Scanner) resolveManual(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, rec, base *store.Record) error {
 	dc := s.cfg.manualClass()
+	// Official-first: SEO re-host farms put the model number in their titles
+	// and URLs while manufacturers use internal doc numbers, so every
+	// model-token heuristic systematically favors spam. When an official PDF
+	// exists but didn't win the pick, content-read it first — a non-official
+	// source never beats an official one that skim-confirms.
+	if cand, data := s.officialFirst(ctx, item, res, dc); cand != nil {
+		res.Best, res.Confidence = cand, skimConfidence
+		return s.attach(ctx, detail, item, res, dc, rec, base, data)
+	}
 	switch {
 	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
 		log.Printf("attach %q [%s] — conf=%.2f llm=%v url=%s", detail.Name, dc.Name, res.Confidence, res.UsedLLM, res.Best.URL)
-		return s.attach(ctx, detail, item, res, dc, rec, base)
+		return s.attach(ctx, detail, item, res, dc, rec, base, nil)
 	case res.BestHTML != nil:
 		if op := bestOfficialPDF(res.Candidates); op != nil {
 			log.Printf("attach %q [%s] — official page-follow pdf %s", detail.Name, dc.Name, op.URL)
 			res.Best = op
-			return s.attach(ctx, detail, item, res, dc, rec, base)
+			return s.attach(ctx, detail, item, res, dc, rec, base, nil)
+		}
+		if cand, data := s.skimPromote(ctx, item, res, dc); cand != nil {
+			res.Best, res.Confidence = cand, skimConfidence
+			return s.attach(ctx, detail, item, res, dc, rec, base, data)
 		}
 		return s.linkManual(ctx, detail, res, dc, base)
 	case res.Best != nil:
+		// URL heuristics couldn't confirm it — but the document itself may
+		// name the model (manufacturer URLs use internal doc numbers). Skim
+		// the top candidates before bothering the human.
+		if cand, data := s.skimPromote(ctx, item, res, dc); cand != nil {
+			res.Best, res.Confidence = cand, skimConfidence
+			return s.attach(ctx, detail, item, res, dc, rec, base, data)
+		}
 		log.Printf("review-gate %q [%s] — conf=%.2f (below %.2f) url=%s", detail.Name, dc.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
 		return s.reviewGate(ctx, detail, res, base)
 	default:
@@ -360,25 +386,125 @@ func (s *Scanner) resolveManual(ctx context.Context, detail *homebox.EntityOut, 
 // confident, else records a notfound in the ledger. No ntfy prompt and no
 // store-status side effect — secondary docs are a bonus, not a gate.
 func (s *Scanner) fetchSecondary(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, dc DocClassCfg) {
-	switch {
-	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
-		if err := s.attach(ctx, detail, item, res, dc, nil, nil); err != nil {
+	if cand, data := s.officialFirst(ctx, item, res, dc); cand != nil {
+		res.Best, res.Confidence = cand, skimConfidence
+		if err := s.attach(ctx, detail, item, res, dc, nil, nil, data); err != nil {
 			log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
 		}
-	case res.BestHTML != nil:
+		return
+	}
+	if res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold {
+		if err := s.attach(ctx, detail, item, res, dc, nil, nil, nil); err != nil {
+			log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
+		}
+		return
+	}
+	if res.BestHTML != nil {
 		if op := bestOfficialPDF(res.Candidates); op != nil {
 			res.Best = op
-			if err := s.attach(ctx, detail, item, res, dc, nil, nil); err != nil {
+			if err := s.attach(ctx, detail, item, res, dc, nil, nil, nil); err != nil {
 				log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
 			}
 			return
 		}
+	}
+	if cand, data := s.skimPromote(ctx, item, res, dc); cand != nil {
+		res.Best, res.Confidence = cand, skimConfidence
+		if err := s.attach(ctx, detail, item, res, dc, nil, nil, data); err != nil {
+			log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
+		}
+		return
+	}
+	if res.BestHTML != nil {
 		if err := s.linkManual(ctx, detail, res, dc, nil); err != nil {
 			log.Printf("secondary link %q [%s]: %v", detail.Name, dc.Name, err)
 		}
-	default:
-		s.recordDecision(ctx, detail, res, dc, "notfound", "")
+		return
 	}
+	s.recordDecision(ctx, detail, res, dc, "notfound", "")
+}
+
+// officialFirst content-reads the best official PDF candidate when the pick
+// (if any) is non-official. Returns the candidate + bytes on skim
+// confirmation. When the winning pick is already official, this is a no-op —
+// the normal ladder handles it.
+func (s *Scanner) officialFirst(ctx context.Context, item discovery.Item, res *discovery.Result, dc DocClassCfg) (*discovery.Candidate, []byte) {
+	if res.Best != nil && res.Best.Official {
+		return nil, nil
+	}
+	off := bestOfficialPDF(res.Candidates)
+	if off == nil {
+		return nil, nil
+	}
+	data, err := s.disc.Download(ctx, off.URL, s.cfg.MaxPDFBytes)
+	if err != nil {
+		log.Printf("official-first download failed (%s): %v", off.URL, err)
+		return nil, nil
+	}
+	v := s.disc.Skim(ctx, item, data, dc.Name)
+	// Official provenance + readable PDF of the right class is enough when the
+	// item has no model number to confirm; with a model number, require it.
+	confirmed := v.IsPDF && !v.ProductMismatch && !v.ClassMismatch &&
+		(v.ModelConfirmed || strings.TrimSpace(item.ModelNumber) == "" || !v.HasText)
+	if !confirmed {
+		return nil, nil
+	}
+	log.Printf("official-first %q [%s]: official source confirmed — %s", item.Name, dc.Name, off.URL)
+	return off, data
+}
+
+// skimPromote downloads the class's top-scored PDF candidates and reads their
+// opening pages: a document whose text names the item's model number is
+// attach-worthy regardless of what its URL looks like. Capped at 2 downloads
+// per item per pass. Returns the winning candidate and its bytes (reused for
+// the attach — no second download).
+func (s *Scanner) skimPromote(ctx context.Context, item discovery.Item, res *discovery.Result, dc DocClassCfg) (*discovery.Candidate, []byte) {
+	if strings.TrimSpace(item.ModelNumber) == "" {
+		return nil, nil // nothing to confirm against
+	}
+	tried := 0
+	for _, c := range topPDFCandidates(res, 2) {
+		tried++
+		data, err := s.disc.Download(ctx, c.URL, s.cfg.MaxPDFBytes)
+		if err != nil {
+			log.Printf("skim-promote download failed (%s): %v", c.URL, err)
+			continue
+		}
+		v := s.disc.Skim(ctx, item, data, dc.Name)
+		if v.IsPDF && v.ModelConfirmed && !v.ProductMismatch && !v.ClassMismatch {
+			log.Printf("skim-promote %q [%s]: document text names the model — %s", item.Name, dc.Name, c.URL)
+			return c, data
+		}
+	}
+	_ = tried
+	return nil, nil
+}
+
+// topPDFCandidates returns up to max PDF candidates by descending score,
+// starting with res.Best when it is a PDF.
+func topPDFCandidates(res *discovery.Result, max int) []*discovery.Candidate {
+	var out []*discovery.Candidate
+	if res.Best != nil && res.Best.IsPDF {
+		out = append(out, res.Best)
+	}
+	idx := make([]int, 0, len(res.Candidates))
+	for i := range res.Candidates {
+		c := &res.Candidates[i]
+		if c.IsPDF && c.Score > 0 && (res.Best == nil || c.URL != res.Best.URL) {
+			idx = append(idx, i)
+		}
+	}
+	sort.Slice(idx, func(a, b int) bool { return res.Candidates[idx[a]].Score > res.Candidates[idx[b]].Score })
+	for _, i := range idx {
+		if len(out) >= max {
+			break
+		}
+		out = append(out, &res.Candidates[i])
+	}
+	if len(out) > max {
+		out = out[:max]
+	}
+	return out
 }
 
 // targetClasses returns the enabled doc classes applicable to this item after
@@ -577,31 +703,37 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 	return nil
 }
 
-// attach downloads, dedupes by content hash, and uploads the doc under its
-// class's Homebox attachment type. On download/verify failure it falls back to
-// the next-best scored PDF candidates. base/rec are nil for secondary classes
-// (no store record, no dedup — the field-presence gate prevents re-attach).
-func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, dc DocClassCfg, rec, base *store.Record) error {
+// attach downloads (or reuses preloaded skim bytes), dedupes by content hash,
+// and uploads the doc under its class's Homebox attachment type. On
+// download/verify failure it falls back to the next-best scored PDF
+// candidates. base/rec are nil for secondary classes (no store record, no
+// dedup — the field-presence gate prevents re-attach).
+func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, dc DocClassCfg, rec, base *store.Record, preloaded []byte) error {
 	best := res.Best
-	data, err := s.disc.Download(ctx, best.URL, s.cfg.MaxPDFBytes)
-	if err != nil {
-		log.Printf("download failed for %q [%s] (%v); trying fallback candidates", detail.Name, dc.Name, err)
-		best, data = s.downloadFallback(ctx, res, item)
-		if best == nil {
-			// Nothing fetchable server-side (bot-walled hosts): link the best
-			// remote sources instead — a phone browser passes the bot wall.
-			return s.linkManual(ctx, detail, res, dc, base)
-		}
-	} else if !best.Official && !s.disc.VerifyPDF(ctx, item, data) {
-		// Official brand-domain docs skip content verification: provenance from
-		// the manufacturer's own support page is stronger evidence than an LLM
-		// reading of a sparse excerpt (observed false-negatives on image-heavy
-		// official manuals). General-web sources still verify.
-		log.Printf("content verify failed for %q [%s] (%s); trying fallback candidates", detail.Name, dc.Name, best.URL)
-		best, data = s.downloadFallback(ctx, res, item)
-		if best == nil {
-			res.Best = nil
-			return s.linkManual(ctx, detail, res, dc, base)
+	data := preloaded // skim-promote already downloaded AND content-verified these bytes
+	if data == nil {
+		var err error
+		data, err = s.disc.Download(ctx, best.URL, s.cfg.MaxPDFBytes)
+		if err != nil {
+			log.Printf("download failed for %q [%s] (%v); trying fallback candidates", detail.Name, dc.Name, err)
+			best, data = s.downloadFallback(ctx, res, item, dc)
+			if best == nil {
+				// Nothing fetchable server-side (bot-walled hosts): link the best
+				// remote sources instead — a phone browser passes the bot wall.
+				return s.linkManual(ctx, detail, res, dc, base)
+			}
+		} else if !skimAccepts(s.disc.Skim(ctx, item, data, dc.Name), best) {
+			// Official brand-domain docs skip the different-product veto
+			// (provenance beats a sparse-excerpt LLM read; observed
+			// false-negatives on image-heavy official manuals) but NOT the
+			// PDF-magic or wrong-class checks — an official parts list must
+			// still not attach as the manual.
+			log.Printf("content skim rejected %q [%s] (%s); trying fallback candidates", detail.Name, dc.Name, best.URL)
+			best, data = s.downloadFallback(ctx, res, item, dc)
+			if best == nil {
+				res.Best = nil
+				return s.linkManual(ctx, detail, res, dc, base)
+			}
 		}
 	}
 	sha := store.DocSHA(data)
@@ -755,8 +887,8 @@ func (s *Scanner) recordError(ctx context.Context, sum *homebox.EntitySummary, c
 }
 
 // downloadFallback tries the remaining PDF candidates in score order; each one
-// must also pass content verification.
-func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, item discovery.Item) (*discovery.Candidate, []byte) {
+// must also pass the content skim.
+func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, item discovery.Item, dc DocClassCfg) (*discovery.Candidate, []byte) {
 	tried := 0
 	for i := range res.Candidates {
 		c := &res.Candidates[i]
@@ -772,13 +904,25 @@ func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, i
 			log.Printf("fallback download failed (%s): %v", c.URL, err)
 			continue
 		}
-		if !c.Official && !s.disc.VerifyPDF(ctx, item, data) {
+		if !skimAccepts(s.disc.Skim(ctx, item, data, dc.Name), c) {
 			continue
 		}
 		log.Printf("fallback candidate succeeded: %s", c.URL)
 		return c, data
 	}
 	return nil, nil
+}
+
+// skimAccepts is the attach veto: real PDF, right class, and (for non-official
+// sources) not positively a different product.
+func skimAccepts(v discovery.SkimVerdict, c *discovery.Candidate) bool {
+	if !v.IsPDF || v.ClassMismatch {
+		return false
+	}
+	if !c.Official && v.ProductMismatch {
+		return false
+	}
+	return true
 }
 
 // bestOfficialPDF returns the highest-scored official-domain PDF candidate.
@@ -824,8 +968,22 @@ func firstSeen(rec *store.Record, now time.Time) time.Time {
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func filename(detail *homebox.EntityOut, dc DocClassCfg) string {
-	stem := strings.Trim(unsafeName.ReplaceAllString(
-		strings.Join(nonEmpty(detail.Manufacturer, detail.ModelNumber, detail.Name), "-"), "-"), "-")
+	// Token-dedupe: the name usually already contains manufacturer + model
+	// ("Whirlpool WDF520PADM7 Dishwasher") — joining all three verbatim gave
+	// Whirlpool-WDF520PADM7-Whirlpool-WDF520PADM7-Dishwasher.pdf.
+	seen := map[string]bool{}
+	var toks []string
+	for _, part := range nonEmpty(detail.Manufacturer, detail.ModelNumber, detail.Name) {
+		for _, w := range strings.Fields(part) {
+			k := strings.ToLower(unsafeName.ReplaceAllString(w, ""))
+			if k == "" || seen[k] {
+				continue
+			}
+			seen[k] = true
+			toks = append(toks, w)
+		}
+	}
+	stem := strings.Trim(unsafeName.ReplaceAllString(strings.Join(toks, "-"), "-"), "-")
 	if stem == "" {
 		stem = "doc"
 	}
