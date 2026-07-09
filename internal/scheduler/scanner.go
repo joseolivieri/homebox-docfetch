@@ -35,9 +35,20 @@ type EntityAPI interface {
 
 // Discoverer runs the search pipeline and downloads a chosen doc.
 type Discoverer interface {
-	Discover(ctx context.Context, it discovery.Item) (*discovery.Result, error)
+	Discover(ctx context.Context, it discovery.Item, want []string) (*discovery.Result, error)
+	SelectClass(ctx context.Context, it discovery.Item, cands []discovery.Candidate, class string) *discovery.Result
 	Download(ctx context.Context, url string, maxBytes int64) ([]byte, error)
 	VerifyPDF(ctx context.Context, it discovery.Item, data []byte) bool
+}
+
+// DocClassCfg is one fetchable document class for the scanner: label, Homebox
+// attachment type, and the category gate that limits it to relevant items.
+type DocClassCfg struct {
+	Name       string
+	Field      string
+	AttachAs   string
+	Categories []string
+	Enabled    bool
 }
 
 // Notifier sends ntfy messages.
@@ -48,8 +59,7 @@ type Notifier interface {
 // Config holds the scanner's behavioural knobs (from the property file).
 type Config struct {
 	PageSize            int
-	DocType             string
-	SkipIfManualExists  bool
+	SkipIfExists        bool // per doc class: skip a class already present on the item
 	AutoAttachThreshold float64
 	MaxPDFBytes         int64
 	FollowupAfter       time.Duration
@@ -61,10 +71,22 @@ type Config struct {
 
 	// Per-provider toggles (docs/photo/warranty; enrich toggles via SetEnricher).
 	DocsEnabled        bool
+	DocClasses         []DocClassCfg // fetchable document classes (manual primary)
 	PhotoEnabled       bool
 	PhotoMinConfidence float64
 	WarrantyEnabled    bool
 	AuditLog           bool
+}
+
+// manualClass returns the primary "manual" class config (synthesized if the
+// operator somehow omitted it — the whole pipeline is manual-centric).
+func (c Config) manualClass() DocClassCfg {
+	for _, dc := range c.DocClasses {
+		if dc.Name == "manual" {
+			return dc
+		}
+	}
+	return DocClassCfg{Name: "manual", Field: "Manual", AttachAs: "manual", Enabled: true}
 }
 
 type Scanner struct {
@@ -87,8 +109,8 @@ func NewScanner(api EntityAPI, disc Discoverer, n Notifier, st *store.Store, cfg
 	if cfg.PageSize == 0 {
 		cfg.PageSize = 100
 	}
-	if cfg.DocType == "" {
-		cfg.DocType = "manual"
+	if len(cfg.DocClasses) == 0 {
+		cfg.DocClasses = []DocClassCfg{{Name: "manual", Field: "Manual", AttachAs: "manual", Enabled: true}}
 	}
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = 24 * time.Hour
@@ -221,27 +243,25 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 	return docErr
 }
 
-// processDocs is the manual-fetch phase: approved-queue fulfilment, discovery
-// pipeline, attach/link/review/notfound. Owns the store record's doc state.
+// processDocs is the doc-fetch phase. It fetches every enabled+applicable doc
+// CLASS (manual, parts, …) independently: each class selects its own best
+// candidate, so a parts list can no longer win the manual's slot (the bug that
+// gave a dishwasher a parts PDF instead of its manual). The manual class is
+// primary — it drives the entity's store status and is the only class that
+// review-gates via ntfy; secondary classes attach when confident, else skip.
 func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, rec, base *store.Record) error {
-	// Already has a manual -> doc-fetch is done.
-	if s.cfg.SkipIfManualExists && hasManual(detail) {
-		log.Printf("skip %q — manual already present", detail.Name)
-		base.Status = store.StatusAttached
-		return s.store.Upsert(ctx, base)
-	}
-
-	// Docs provider disabled: record the (undocumented) state and move on.
 	if !s.cfg.DocsEnabled {
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}
 
+	manual := s.cfg.manualClass()
+
 	// One-tap approval queued via the notes block (the portal makes no web
 	// calls — the Attach button just writes "approved [pdf](url)"). Fulfil it
 	// here: download + attach the exact URL the human approved, no discovery.
 	if approved := notes.ApprovedURLs(detail.Notes); len(approved) > 0 {
-		return s.attachApproved(ctx, detail, approved[len(approved)-1], base)
+		return s.attachApproved(ctx, detail, approved[len(approved)-1], base, manual)
 	}
 
 	item := discovery.Item{
@@ -253,19 +273,35 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 		HintURLs: notes.QRURLs(detail.Notes),
 	}
 	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" && strings.TrimSpace(item.Name) == "" {
-		// Truly nothing to search on.
 		log.Printf("skip %q — no searchable identity", detail.Name)
 		base.Status = store.StatusNotFound
 		base.Attempts++
 		return s.store.Upsert(ctx, base)
 	}
 
-	// Rejected URLs (ntfy Reject button / hand-written "rejected" notes lines)
-	// are permanent negative labels: ingest new ones into the ledger and strip
-	// them from this run's candidates so they are never proposed again.
+	// Applicable classes (enabled ∧ category gate) not already satisfied.
+	var pending []DocClassCfg
+	for _, dc := range s.targetClasses(detail) {
+		if s.cfg.SkipIfExists && hasDoc(detail, dc) {
+			continue
+		}
+		pending = append(pending, dc)
+	}
+	if len(pending) == 0 {
+		// Nothing to fetch: either all present, or none applies to this item.
+		if hasDoc(detail, manual) {
+			base.Status = store.StatusAttached
+		} else {
+			base.Status = store.StatusNotFound
+		}
+		return s.store.Upsert(ctx, base)
+	}
+
+	// Rejected URLs (ntfy Reject / hand-written "rejected" lines) are permanent
+	// negative labels: ingest new ones and strip them from this run.
 	rejected := s.rejectedSet(ctx, detail)
 
-	res, err := s.disc.Discover(ctx, item)
+	res, err := s.disc.Discover(ctx, item, classNames(pending))
 	if err != nil {
 		return err
 	}
@@ -275,29 +311,124 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 	}
 	filterRejected(res, rejected)
 
+	// Secondary classes first (attach/link side-effects only; no ntfy, no store
+	// status), then the manual class drives base status + return.
+	for _, dc := range pending {
+		if dc.Name == manual.Name {
+			continue
+		}
+		cres := s.disc.SelectClass(ctx, item, res.Candidates, dc.Name)
+		s.fetchSecondary(ctx, detail, item, cres, dc)
+	}
+
+	if !containsClass(pending, manual.Name) {
+		// Manual already present; only secondaries were pending.
+		base.Status = store.StatusAttached
+		return s.store.Upsert(ctx, base)
+	}
+	cres := s.disc.SelectClass(ctx, item, res.Candidates, manual.Name)
+	return s.resolveManual(ctx, detail, item, cres, rec, base)
+}
+
+// resolveManual runs the primary-class decision ladder: attach / official
+// page-follow / link / review-gate / notfound. Owns the store record.
+func (s *Scanner) resolveManual(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, rec, base *store.Record) error {
+	dc := s.cfg.manualClass()
 	switch {
 	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
-		log.Printf("attach %q — conf=%.2f llm=%v url=%s", detail.Name, res.Confidence, res.UsedLLM, res.Best.URL)
-		return s.attach(ctx, detail, res, rec, base)
+		log.Printf("attach %q [%s] — conf=%.2f llm=%v url=%s", detail.Name, dc.Name, res.Confidence, res.UsedLLM, res.Best.URL)
+		return s.attach(ctx, detail, item, res, dc, rec, base)
 	case res.BestHTML != nil:
-		// Prefer a PDF harvested from the official support page (page-follow)
-		// over linking the page itself; attach() falls back to the HTML link
-		// automatically when the PDFs fail to download or verify.
 		if op := bestOfficialPDF(res.Candidates); op != nil {
-			log.Printf("attach %q — official page-follow pdf %s", detail.Name, op.URL)
+			log.Printf("attach %q [%s] — official page-follow pdf %s", detail.Name, dc.Name, op.URL)
 			res.Best = op
-			return s.attach(ctx, detail, res, rec, base)
+			return s.attach(ctx, detail, item, res, dc, rec, base)
 		}
-		return s.linkManual(ctx, detail, res, base)
+		return s.linkManual(ctx, detail, res, dc, base)
 	case res.Best != nil:
-		log.Printf("review-gate %q — conf=%.2f (below %.2f) url=%s", detail.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
+		log.Printf("review-gate %q [%s] — conf=%.2f (below %.2f) url=%s", detail.Name, dc.Name, res.Confidence, s.cfg.AutoAttachThreshold, res.Best.URL)
 		return s.reviewGate(ctx, detail, res, base)
 	default:
-		log.Printf("no manual found for %q (candidates=%d)", detail.Name, len(res.Candidates))
-		s.recordDecision(ctx, detail, res, "notfound", "")
+		log.Printf("no %s found for %q (candidates=%d)", dc.Name, detail.Name, len(res.Candidates))
+		s.recordDecision(ctx, detail, res, dc, "notfound", "")
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}
+}
+
+// fetchSecondary attaches (or links) a non-manual class when the pipeline is
+// confident, else records a notfound in the ledger. No ntfy prompt and no
+// store-status side effect — secondary docs are a bonus, not a gate.
+func (s *Scanner) fetchSecondary(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, dc DocClassCfg) {
+	switch {
+	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
+		if err := s.attach(ctx, detail, item, res, dc, nil, nil); err != nil {
+			log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
+		}
+	case res.BestHTML != nil:
+		if op := bestOfficialPDF(res.Candidates); op != nil {
+			res.Best = op
+			if err := s.attach(ctx, detail, item, res, dc, nil, nil); err != nil {
+				log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
+			}
+			return
+		}
+		if err := s.linkManual(ctx, detail, res, dc, nil); err != nil {
+			log.Printf("secondary link %q [%s]: %v", detail.Name, dc.Name, err)
+		}
+	default:
+		s.recordDecision(ctx, detail, res, dc, "notfound", "")
+	}
+}
+
+// targetClasses returns the enabled doc classes applicable to this item after
+// the per-class category gate (empty categories = all items).
+func (s *Scanner) targetClasses(detail *homebox.EntityOut) []DocClassCfg {
+	var out []DocClassCfg
+	for _, dc := range s.cfg.DocClasses {
+		if !dc.Enabled || !categoryMatch(detail, dc.Categories) {
+			continue
+		}
+		out = append(out, dc)
+	}
+	return out
+}
+
+// categoryMatch reports whether the item satisfies a class's category gate.
+// No categories configured => the class applies to everything. A category
+// matches against the item's tags AND its name/type — enrichment doesn't
+// always tag a category, but "Whirlpool WDF520PADM7 Dishwasher" still names it.
+func categoryMatch(detail *homebox.EntityOut, cats []string) bool {
+	if len(cats) == 0 {
+		return true
+	}
+	hay := strings.ToLower(detail.Name)
+	for _, t := range detail.Tags {
+		hay += " " + strings.ToLower(t.Name)
+	}
+	for _, c := range cats {
+		if c = strings.ToLower(strings.TrimSpace(c)); c != "" && strings.Contains(hay, c) {
+			return true
+		}
+	}
+	return false
+}
+
+func classNames(cs []DocClassCfg) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Name
+	}
+	return out
+}
+
+func containsClass(cs []DocClassCfg, name string) bool {
+	for _, c := range cs {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // rejectedSet unions ledger rejections with "rejected" lines in the entity's
@@ -305,7 +436,7 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 // between the portal and scheduler processes), ingesting new notes rejections
 // as ledger labels on first sight.
 func (s *Scanner) rejectedSet(ctx context.Context, detail *homebox.EntityOut) map[string]bool {
-	set, err := s.store.RejectedURLs(ctx, detail.ID, s.cfg.DocType)
+	set, err := s.store.RejectedURLs(ctx, detail.ID, s.cfg.manualClass().Name)
 	if err != nil {
 		log.Printf("ledger rejected urls %s: %v", detail.ID, err)
 		set = map[string]bool{}
@@ -320,7 +451,7 @@ func (s *Scanner) rejectedSet(ctx context.Context, detail *homebox.EntityOut) ma
 			// No proposal row to label (hand-written rejection): synthesize one so
 			// the URL still counts as a negative and stays filtered.
 			_ = s.store.RecordDecision(ctx, &store.Decision{
-				EntityID: detail.ID, EntityName: detail.Name, DocClass: s.cfg.DocType,
+				EntityID: detail.ID, EntityName: detail.Name, DocClass: s.cfg.manualClass().Name,
 				ChosenURL: u, Outcome: "review", Label: store.LabelRejected, LabelSrc: "manual",
 			})
 		}
@@ -362,11 +493,11 @@ type candLite struct {
 // recordDecision appends the pipeline's verdict for this entity to the
 // learning ledger. chosenURL overrides the result's pick (fallback downloads
 // can land on a different candidate than res.Best).
-func (s *Scanner) recordDecision(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, outcome, chosenURL string) {
+func (s *Scanner) recordDecision(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, dc DocClassCfg, outcome, chosenURL string) {
 	d := &store.Decision{
 		EntityID:   detail.ID,
 		EntityName: detail.Name,
-		DocClass:   s.cfg.DocType,
+		DocClass:   dc.Name,
 		Outcome:    outcome,
 		ChosenURL:  chosenURL,
 	}
@@ -398,10 +529,11 @@ func (s *Scanner) recordDecision(ctx context.Context, detail *homebox.EntityOut,
 	}
 }
 
-// linkManual records online manual sources in custom fields — "Manual" for a
-// remote PDF, "Manual (web)" for an HTML support page. Homebox auto-links a
-// single URL per text field. No file is attached.
-func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, base *store.Record) error {
+// linkManual records online doc sources in custom fields — "<Field>" for a
+// remote PDF, "<Field> (web)" for an HTML support page. Homebox auto-links a
+// single URL per text field. No file is attached. base==nil marks a secondary
+// class (no store status, no review-gate fallback).
+func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, dc DocClassCfg, base *store.Record) error {
 	fresh, err := s.api.GetEntity(ctx, detail.ID)
 	if err != nil {
 		return err
@@ -410,96 +542,105 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 	var links []string
 	docURL := ""
 	if res.Best != nil && res.Best.IsPDF {
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", notes.MDLink("pdf", res.Best.URL))
+		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", res.Best.URL))
 		links = append(links, notes.MDLink("pdf", res.Best.URL))
 		docURL = res.Best.URL
 	}
 	if res.BestHTML != nil {
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", notes.MDLink("web", res.BestHTML.URL))
+		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field+" (web)", notes.MDLink("web", res.BestHTML.URL))
 		links = append(links, notes.MDLink("web", res.BestHTML.URL))
 		if docURL == "" {
 			docURL = res.BestHTML.URL
 		}
 	}
 	if docURL == "" {
+		if base == nil {
+			s.recordDecision(ctx, detail, res, dc, "notfound", "")
+			return nil
+		}
 		return s.reviewGate(ctx, detail, res, base)
 	}
-	n := notes.Append(fresh.Notes, notes.Line("manual linked "+strings.Join(links, " ")))
+	n := notes.Append(fresh.Notes, notes.Line(dc.Name+" linked "+strings.Join(links, " ")))
 	upd.Notes = &n
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		return err
 	}
-	log.Printf("manual linked for %q — %s", detail.Name, docURL)
-	s.recordDecision(ctx, detail, res, "linked", docURL)
-	t := time.Now()
-	base.Status = store.StatusAttached
-	base.DocURL = docURL
-	base.LastAttached = &t
-	return s.store.Upsert(ctx, base)
+	log.Printf("%s linked for %q — %s", dc.Name, detail.Name, docURL)
+	s.recordDecision(ctx, detail, res, dc, "linked", docURL)
+	if base != nil {
+		t := time.Now()
+		base.Status = store.StatusAttached
+		base.DocURL = docURL
+		base.LastAttached = &t
+		return s.store.Upsert(ctx, base)
+	}
+	return nil
 }
 
-// attach downloads, dedupes by content hash, uploads as a manual. When the
-// chosen candidate's download fails (bot-blocked vendor CDNs, dead links), it
-// falls back to the next-best scored PDF candidates instead of failing the item.
-func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, rec, base *store.Record) error {
-	item := discovery.Item{Manufacturer: detail.Manufacturer, ModelNumber: detail.ModelNumber, Name: detail.Name}
+// attach downloads, dedupes by content hash, and uploads the doc under its
+// class's Homebox attachment type. On download/verify failure it falls back to
+// the next-best scored PDF candidates. base/rec are nil for secondary classes
+// (no store record, no dedup — the field-presence gate prevents re-attach).
+func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item discovery.Item, res *discovery.Result, dc DocClassCfg, rec, base *store.Record) error {
 	best := res.Best
 	data, err := s.disc.Download(ctx, best.URL, s.cfg.MaxPDFBytes)
 	if err != nil {
-		log.Printf("download failed for %q (%v); trying fallback candidates", detail.Name, err)
+		log.Printf("download failed for %q [%s] (%v); trying fallback candidates", detail.Name, dc.Name, err)
 		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
 			// Nothing fetchable server-side (bot-walled hosts): link the best
 			// remote sources instead — a phone browser passes the bot wall.
-			return s.linkManual(ctx, detail, res, base)
+			return s.linkManual(ctx, detail, res, dc, base)
 		}
 	} else if !best.Official && !s.disc.VerifyPDF(ctx, item, data) {
 		// Official brand-domain docs skip content verification: provenance from
 		// the manufacturer's own support page is stronger evidence than an LLM
 		// reading of a sparse excerpt (observed false-negatives on image-heavy
 		// official manuals). General-web sources still verify.
-		// Content says different product — try the other candidates, else the
-		// HTML manual page, else gate. The rejected PDF must not be linked
-		// either (its content is wrong, not just unreachable).
-		log.Printf("content verify failed for %q (%s); trying fallback candidates", detail.Name, best.URL)
+		log.Printf("content verify failed for %q [%s] (%s); trying fallback candidates", detail.Name, dc.Name, best.URL)
 		best, data = s.downloadFallback(ctx, res, item)
 		if best == nil {
 			res.Best = nil
-			return s.linkManual(ctx, detail, res, base)
+			return s.linkManual(ctx, detail, res, dc, base)
 		}
 	}
 	sha := store.DocSHA(data)
-	base.DocURL = best.URL
-	base.DocSHA256 = sha
 
 	if rec != nil && rec.DocSHA256 == sha {
 		// Identical doc already attached previously; do not re-upload.
+		base.DocURL = best.URL
+		base.DocSHA256 = sha
 		base.Status = store.StatusAttached
 		base.LastAttached = rec.LastAttached
 		return s.store.Upsert(ctx, base)
 	}
 
-	updated, err := s.api.UploadAttachment(ctx, detail.ID, filename(detail), s.cfg.DocType, false, bytes.NewReader(data))
+	updated, err := s.api.UploadAttachment(ctx, detail.ID, filename(detail, dc), dc.AttachAs, false, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
-	// Log the attach + link the source in custom fields ("Manual" auto-links
-	// in the Homebox UI; one URL per field — two don't parse).
+	// Log the attach + link the source in custom fields (Homebox auto-links a
+	// single URL per field).
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		line := fmt.Sprintf("manual attached (%.2f) %s", res.Confidence, notes.MDLink("pdf", best.URL))
+		line := fmt.Sprintf("%s attached (%.2f) %s", dc.Name, res.Confidence, notes.MDLink("pdf", best.URL))
 		n := notes.Append(updated.Notes, notes.Line(line))
 		upd.Notes = &n
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", notes.MDLink("pdf", best.URL))
+		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", best.URL))
 		if res.BestHTML != nil && res.BestHTML.Official {
-			upd.Fields = homebox.UpsertField(upd.Fields, "Manual (web)", notes.MDLink("web", res.BestHTML.URL))
+			upd.Fields = homebox.UpsertField(upd.Fields, dc.Field+" (web)", notes.MDLink("web", res.BestHTML.URL))
 		}
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("attach note put %s: %v", detail.ID, err)
 		}
 	}
-	s.recordDecision(ctx, detail, res, "attached", best.URL)
+	s.recordDecision(ctx, detail, res, dc, "attached", best.URL)
+	if base == nil {
+		return nil // secondary class: no store record to update
+	}
 	t := time.Now()
+	base.DocURL = best.URL
+	base.DocSHA256 = sha
 	base.Status = store.StatusAttached
 	base.LastAttached = &t
 	return s.store.Upsert(ctx, base)
@@ -509,9 +650,10 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, res *di
 // one-tap Attach / Reject actions. Reject writes a "rejected" notes line via
 // the portal, which the next scan ingests as a permanent negative label.
 func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, base *store.Record) error {
+	dc := s.cfg.manualClass()
 	if res.Best == nil {
 		// Nothing left to review (every candidate failed or was rejected).
-		s.recordDecision(ctx, detail, res, "notfound", "")
+		s.recordDecision(ctx, detail, res, dc, "notfound", "")
 		base.Status = store.StatusNotFound
 		return s.store.Upsert(ctx, base)
 	}
@@ -533,7 +675,7 @@ func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res
 	if err := s.ntfy.Send(ctx, msg); err != nil {
 		return err
 	}
-	s.recordDecision(ctx, detail, res, "review", res.Best.URL)
+	s.recordDecision(ctx, detail, res, dc, "review", res.Best.URL)
 	base.DocURL = res.Best.URL
 	base.Status = store.StatusPendingReview
 	return s.store.Upsert(ctx, base)
@@ -637,15 +779,22 @@ func bestOfficialPDF(cands []discovery.Candidate) *discovery.Candidate {
 	return best
 }
 
-func hasManual(detail *homebox.EntityOut) bool {
-	for _, a := range detail.Attachments {
-		if a.Type == "manual" {
-			return true
+// hasDoc reports whether a doc class is already present: a custom field (set
+// by both attach and link) is the primary signal; for the manual class we also
+// honor a pre-existing type=manual attachment that predates the field feature.
+func hasDoc(detail *homebox.EntityOut, dc DocClassCfg) bool {
+	if homebox.FieldValue(detail.Fields, dc.Field) != "" ||
+		homebox.FieldValue(detail.Fields, dc.Field+" (web)") != "" {
+		return true
+	}
+	if dc.Name == "manual" {
+		for _, a := range detail.Attachments {
+			if a.Type == "manual" {
+				return true
+			}
 		}
 	}
-	// A linked online manual counts as documented (no local file needed).
-	return homebox.FieldValue(detail.Fields, "Manual") != "" ||
-		homebox.FieldValue(detail.Fields, "Manual (web)") != ""
+	return false
 }
 
 func firstSeen(rec *store.Record, now time.Time) time.Time {
@@ -657,11 +806,15 @@ func firstSeen(rec *store.Record, now time.Time) time.Time {
 
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-func filename(detail *homebox.EntityOut) string {
+func filename(detail *homebox.EntityOut, dc DocClassCfg) string {
 	stem := strings.Trim(unsafeName.ReplaceAllString(
 		strings.Join(nonEmpty(detail.Manufacturer, detail.ModelNumber, detail.Name), "-"), "-"), "-")
 	if stem == "" {
-		stem = "manual"
+		stem = "doc"
+	}
+	// Suffix non-manual classes so a parts PDF doesn't collide with the manual.
+	if dc.Name != "manual" && dc.Name != "" {
+		stem += "-" + dc.Name
 	}
 	return stem + ".pdf"
 }

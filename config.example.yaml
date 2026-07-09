@@ -81,10 +81,41 @@ curation:
 
   docs:
     enabled: true                  # each curation provider toggles individually
-    doc_type: manual               # native Homebox attachment enum
-    skip_if_manual_exists: true
-    auto_attach_threshold: 0.7     # >= attach; below -> ntfy review-gate
+    skip_if_exists: true           # per class: skip a class already on the item
+    auto_attach_threshold: 0.7     # >= attach; below -> ntfy review-gate (manual class only)
     require_model_match: true
+    # Document classes. Each selects its OWN best candidate and attaches
+    # independently, so an appliance gets BOTH a manual and a parts list
+    # instead of one competing for a single slot. keywords classify candidates
+    # (and set the page-follow harvest keep-set); categories gate a class to
+    # matching item tags (empty = all items); manual is primary (drives status
+    # + is the only class that ntfy review-gates).
+    classes:
+      - name: manual
+        field: Manual              # -> "Manual" + "Manual (web)" custom fields
+        attach_as: manual          # Homebox attachment enum
+        enabled: true
+        keywords: [manual, guide, owner, "use and care", instruction, user, handbook, knowledge-download]
+        queries: ["{subject} user manual filetype:pdf", "{subject} owner's manual pdf"]
+      - name: parts
+        field: Parts
+        attach_as: attachment
+        enabled: true
+        keywords: [parts, "parts list", "parts diagram", exploded, spare, schematic, "service manual", repair]
+        queries: ["{subject} parts list filetype:pdf", "{subject} parts diagram pdf"]
+        categories: [appliance, dishwasher, washer, dryer, refrigerator, fridge, freezer, oven, range, stove, microwave, hvac, furnace, "water heater", tool, mower, vacuum, grill]
+      - name: quickstart
+        field: Quick start
+        attach_as: attachment
+        enabled: false
+        keywords: ["quick start", quickstart, qsg, "quick setup", "getting started", "setup guide"]
+        queries: ["{subject} quick start guide filetype:pdf"]
+      - name: datasheet
+        field: Datasheet
+        attach_as: attachment
+        enabled: false
+        keywords: [datasheet, "data sheet", specification, "spec sheet", "technical data"]
+        queries: ["{subject} datasheet filetype:pdf"]
 
   # Metadata auto-completion. Fill-only: never overwrites human data. A field
   # writes only when >=min_agreeing_sources domains corroborate it AND the

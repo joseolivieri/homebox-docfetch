@@ -55,10 +55,12 @@ func TestPipelineRulesWinner(t *testing.T) {
 		RequireModel: true,
 	}, failReranker{t}) // reranker must NOT be called on a clear winner
 
-	res, err := e.Discover(context.Background(), Item{Manufacturer: "Acme", ModelNumber: "W-1000", Name: "Widget"})
+	it := Item{Manufacturer: "Acme", ModelNumber: "W-1000", Name: "Widget"}
+	gathered, err := e.Discover(context.Background(), it, []string{"manual"})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
+	res := e.SelectClass(context.Background(), it, gathered.Candidates, "manual")
 	if res.UsedLLM {
 		t.Fatal("clear winner should not use the LLM")
 	}
@@ -88,10 +90,12 @@ func TestPipelineAmbiguousUsesLLM(t *testing.T) {
 		MinPDFBytes: 1, MaxPDFBytes: 99_000_000,
 	}, stubReranker{idx: 0, conf: 0.85})
 
-	res, err := e.Discover(context.Background(), Item{ModelNumber: "W-1000"})
+	it := Item{ModelNumber: "W-1000"}
+	gathered, err := e.Discover(context.Background(), it, []string{"manual"})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
+	res := e.SelectClass(context.Background(), it, gathered.Candidates, "manual")
 	if !res.UsedLLM {
 		t.Fatal("ambiguous case should use the LLM")
 	}

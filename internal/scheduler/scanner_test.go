@@ -67,9 +67,15 @@ type fakeDisc struct {
 	discCalls int
 }
 
-func (d *fakeDisc) Discover(_ context.Context, _ discovery.Item) (*discovery.Result, error) {
+func (d *fakeDisc) Discover(_ context.Context, _ discovery.Item, _ []string) (*discovery.Result, error) {
 	d.discCalls++
 	return d.res, nil
+}
+func (d *fakeDisc) SelectClass(_ context.Context, _ discovery.Item, _ []discovery.Candidate, _ string) *discovery.Result {
+	if d.res == nil {
+		return &discovery.Result{}
+	}
+	return d.res
 }
 func (d *fakeDisc) Download(_ context.Context, _ string, _ int64) ([]byte, error) { return d.body, nil }
 func (d *fakeDisc) VerifyPDF(_ context.Context, _ discovery.Item, _ []byte) bool  { return true }
@@ -88,7 +94,7 @@ func newTestScanner(t *testing.T, api *fakeAPI, disc *fakeDisc, nt *fakeNtfy) (*
 	sc := NewScanner(api, disc, nt, st, Config{
 		DocsEnabled:         true,
 		AutoAttachThreshold: 0.7,
-		SkipIfManualExists:  true,
+		SkipIfExists:        true,
 		MaxPDFBytes:         10_000_000,
 		UnverifiedTag:       "docfetch/unverified",
 	})
@@ -245,5 +251,50 @@ func TestDedupeSkipsReupload(t *testing.T) {
 	rec, _ := st.Get(ctx, "e1")
 	if rec.Status != store.StatusAttached {
 		t.Fatalf("expected attached, got %s", rec.Status)
+	}
+}
+
+func TestCategoryMatchAndDocName(t *testing.T) {
+	appliance := &homebox.EntityOut{Tags: []homebox.Tag{{Name: "Dishwasher"}}}
+	earbuds := &homebox.EntityOut{Tags: []homebox.Tag{{Name: "Earbuds"}}}
+	byName := &homebox.EntityOut{Name: "Whirlpool WDF520PADM7 Dishwasher"} // no category tag
+	parts := DocClassCfg{Name: "parts", Field: "Parts", Categories: []string{"dishwasher", "washer"}}
+	if !categoryMatch(appliance, parts.Categories) {
+		t.Fatal("dishwasher tag should match parts categories")
+	}
+	if !categoryMatch(byName, parts.Categories) {
+		t.Fatal("dishwasher in the NAME should match parts categories")
+	}
+	if categoryMatch(earbuds, parts.Categories) {
+		t.Fatal("earbuds must NOT match parts categories")
+	}
+	if categoryMatch(earbuds, nil) != true {
+		t.Fatal("empty categories = applies to all")
+	}
+	// non-manual class gets a filename suffix so it can't collide with the manual
+	d := &homebox.EntityOut{Manufacturer: "LG", ModelNumber: "DLEX4000"}
+	if got := filename(d, parts); got != "LG-DLEX4000-parts.pdf" {
+		t.Fatalf("parts filename = %q", got)
+	}
+	man := DocClassCfg{Name: "manual", Field: "Manual"}
+	if got := filename(d, man); got != "LG-DLEX4000.pdf" {
+		t.Fatalf("manual filename = %q", got)
+	}
+}
+
+func TestHasDocByField(t *testing.T) {
+	parts := DocClassCfg{Name: "parts", Field: "Parts", AttachAs: "attachment"}
+	withField := &homebox.EntityOut{Fields: []homebox.EntityField{{Name: "Parts", TextValue: "[pdf](x)"}}}
+	if !hasDoc(withField, parts) {
+		t.Fatal("field presence should satisfy hasDoc")
+	}
+	if hasDoc(&homebox.EntityOut{}, parts) {
+		t.Fatal("empty entity should not satisfy hasDoc")
+	}
+	// manual back-compat: a bare type=manual attachment counts even without a field
+	man := DocClassCfg{Name: "manual", Field: "Manual"}
+	legacy := &homebox.EntityOut{Attachments: []homebox.Attachment{{Type: "manual"}}}
+	if !hasDoc(legacy, man) {
+		t.Fatal("legacy manual attachment should satisfy hasDoc(manual)")
 	}
 }

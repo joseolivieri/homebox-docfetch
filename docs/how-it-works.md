@@ -109,6 +109,19 @@ domain, PDF vs page). Only when rules can't decide does a small, cheap AI
 model break the tie — it sees only titles and snippets, never whole documents,
 which keeps costs near zero.
 
+**More than one kind of document.** A product often has several official docs
+— an owner's manual, a parts list, a quick-start guide, a datasheet. These are
+handled as separate *classes*: each hunts and attaches its own best match
+independently, so a dishwasher gets both its manual **and** its parts list
+instead of one crowding out the other (an earlier version handed a dishwasher a
+parts list *as* its manual). Each class is labeled by keywords, and a class can
+be limited to relevant item types — parts lists are fetched only for appliances
+and tools (matched by the item's category or its name), never for earbuds. The
+manual is the primary class: it's the one that drives status and sends a review
+notification when unsure; the others attach quietly when confident. Classes and
+their targeting live in the config file, so adding "energy guide" or "recall
+notice" later is just a few lines.
+
 **Verification before attaching.** A downloaded file must actually be a PDF,
 and its first pages are skimmed by the AI to confirm it's about *this*
 product — this is what stops a Soundcore manual landing on an Anker charger.

@@ -43,6 +43,19 @@ func build(cfg *config.Config) (*deps, error) {
 		rr = llm.New(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.RerankModel)
 	}
 	cur := cfg.Curation
+
+	// Doc classes: discovery needs keywords/queries to classify + harvest;
+	// the scanner needs field/attach-type/category to attach.
+	var discClasses []discovery.DocClass
+	var schedClasses []scheduler.DocClassCfg
+	for _, dc := range cur.Docs.Classes {
+		discClasses = append(discClasses, discovery.DocClass{Name: dc.Name, Keywords: dc.Keywords, Queries: dc.Queries})
+		schedClasses = append(schedClasses, scheduler.DocClassCfg{
+			Name: dc.Name, Field: dc.Field, AttachAs: dc.AttachAs,
+			Categories: dc.Categories, Enabled: dc.Enabled,
+		})
+	}
+
 	eng := discovery.NewEngine(discovery.Options{
 		SearxngURL:      cur.Discovery.SearxngURL,
 		Language:        cur.Discovery.Language,
@@ -56,14 +69,14 @@ func build(cfg *config.Config) (*deps, error) {
 		MaxSnippetChars: cfg.LLM.MaxSnippetChars,
 		RequireModel:    cur.Docs.RequireModelMatch,
 		RatePerMin:      cur.Discovery.RateLimitPerMin,
+		Classes:         discClasses,
 	}, rr)
 
 	nt := notify.New(cfg.Notify.NtfyURL, cfg.Notify.NtfyTopic, cfg.Notify.NtfyToken)
 
 	sc := scheduler.NewScanner(hb, eng, nt, st, scheduler.Config{
 		PageSize:            cfg.Homebox.PageSize,
-		DocType:             cur.Docs.DocType,
-		SkipIfManualExists:  cur.Docs.SkipIfManualExists,
+		SkipIfExists:        cur.Docs.SkipIfExists,
 		AutoAttachThreshold: cur.Docs.AutoAttachThreshold,
 		MaxPDFBytes:         cur.Discovery.MaxPDFBytes,
 		FollowupAfter:       cur.Schedule.FollowupAfter,
@@ -73,6 +86,7 @@ func build(cfg *config.Config) (*deps, error) {
 		PortalURL:           strings.TrimRight(cfg.Intake.PublicURL, "/"),
 		SignKey:             cfg.Homebox.Token,
 		DocsEnabled:         cfg.DocsEnabled(),
+		DocClasses:          schedClasses,
 		PhotoEnabled:        cur.Photo.Enabled,
 		PhotoMinConfidence:  cur.Photo.MinConfidence,
 		WarrantyEnabled:     cur.Warranty.Enabled,

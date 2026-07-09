@@ -130,7 +130,11 @@ curation:
   schedule:  {scan_new, followup, followup_after, change_poll}
   discovery: {searxng_url, language, pipeline, queries, max_candidates,
               min/max_pdf_bytes, rate_limit_per_min, backoff_base}
-  docs:      {doc_type, skip_if_manual_exists, auto_attach_threshold, require_model_match}
+  docs:      {enabled, skip_if_exists, auto_attach_threshold, require_model_match,
+              classes: [{name, field, attach_as, keywords, queries, categories, enabled}]}
+             # each class selects + attaches its own best doc; manual is primary
+             # (drives status + review-gate); categories gate a class to matching
+             # item tags/name (parts -> appliances/tools). See D23.
   enrich:    {enabled, fill_only, auto_write_threshold, min_agreeing_sources, back_check, fields}
   photo:     {enabled, min_confidence}    # official product photo
   warranty:  {enabled}

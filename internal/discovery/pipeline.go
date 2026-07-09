@@ -143,10 +143,36 @@ func identityMatch(it Item, hay string) bool {
 }
 
 var (
-	hrefRe      = regexp.MustCompile(`(?i)href\s*=\s*["']([^"']+\.pdf[^"']*)["']`)
-	manualDocRe = regexp.MustCompile(`(?i)manual|guide|instruction|datasheet|user|_um|_ug|quickstart|qsg|knowledge-download`)
-	legalDocRe  = regexp.MustCompile(`(?i)statement|policy|terms|privacy|compliance|conduct|msa_|warranty-policy|declaration|conformity`)
+	hrefRe     = regexp.MustCompile(`(?i)href\s*=\s*["']([^"']+\.pdf[^"']*)["']`)
+	legalDocRe = regexp.MustCompile(`(?i)statement|policy|terms|privacy|compliance|conduct|msa_|warranty-policy|declaration|conformity`)
 )
+
+// buildKeepRe compiles the page-follow keep-set from every class's keywords, so
+// a class the operator adds (e.g. "parts") is automatically harvested from
+// support pages. Without this a parts PDF would be dropped before it could be
+// classified. Spaces in a keyword match loosely across separators.
+func buildKeepRe(classes []DocClass) *regexp.Regexp {
+	seen := map[string]bool{}
+	var alts []string
+	for _, c := range classes {
+		for _, kw := range c.Keywords {
+			kw = strings.ToLower(strings.TrimSpace(kw))
+			if kw == "" || seen[kw] {
+				continue
+			}
+			seen[kw] = true
+			parts := strings.Fields(kw)
+			for i := range parts {
+				parts[i] = regexp.QuoteMeta(parts[i])
+			}
+			alts = append(alts, strings.Join(parts, `[\s_-]*`))
+		}
+	}
+	if len(alts) == 0 {
+		alts = []string{"manual", "guide"}
+	}
+	return regexp.MustCompile(`(?i)` + strings.Join(alts, "|"))
+}
 
 // pdfLinksFrom fetches an HTML page and extracts absolute PDF links.
 func (e *Engine) pdfLinksFrom(ctx context.Context, pageURL string) []string {
@@ -182,9 +208,9 @@ func (e *Engine) pdfLinksFrom(ctx context.Context, pageURL string) []string {
 		seen[abs] = true
 		l := strings.ToLower(abs)
 		if legalDocRe.MatchString(l) {
-			continue // footer/legal PDFs (MSA statements, policies) — never manuals
+			continue // footer/legal PDFs (MSA statements, policies) — never docs
 		}
-		if manualDocRe.MatchString(l) {
+		if e.docKeep.MatchString(l) {
 			manualish = append(manualish, abs)
 		} else {
 			other = append(other, abs)
@@ -206,10 +232,10 @@ func (e *Engine) pdfLinksFrom(ctx context.Context, pageURL string) []string {
 // webCandidates is the general search stage. pdfOnly=true uses the configured
 // query templates (typically filetype:pdf); pdfOnly=false strips the filetype
 // filter so official HTML manual pages surface too.
-func (e *Engine) webCandidates(ctx context.Context, it Item, pdfOnly bool) []Candidate {
+func (e *Engine) webCandidates(ctx context.Context, it Item, pdfOnly bool, queries []string) []Candidate {
 	seen := map[string]bool{}
 	var cands []Candidate
-	for _, q := range e.renderQueries(it) {
+	for _, q := range queries {
 		if !pdfOnly {
 			q = strings.TrimSpace(strings.ReplaceAll(q, "filetype:pdf", ""))
 		}

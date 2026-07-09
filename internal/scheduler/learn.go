@@ -108,7 +108,7 @@ func (s *Scanner) sweepOverrides(ctx context.Context) {
 		}
 
 		// Doc removed by the user -> negative label + re-search without the URL.
-		if rec.DocURL != "" && !hasManual(detail) {
+		if rec.DocURL != "" && !hasDoc(detail, s.cfg.manualClass()) {
 			if n, _ := s.store.LabelDecisions(ctx, rec.EntityID, rec.DocURL, store.LabelRejected, "override"); n > 0 {
 				log.Printf("override: %q removed manual %s — labeled rejected", detail.Name, rec.DocURL)
 			}

@@ -110,19 +110,63 @@ type Discovery struct {
 	BackoffBase     time.Duration `yaml:"backoff_base"`
 }
 
-// Docs configures manual fetching/attaching. Enabled is a pointer so that an
+// Docs configures document fetching/attaching. Enabled is a pointer so that an
 // absent key means true — docs are the core provider.
 type Docs struct {
-	Enabled             *bool   `yaml:"enabled"`
-	DocType             string  `yaml:"doc_type"`
-	SkipIfManualExists  bool    `yaml:"skip_if_manual_exists"`
-	AutoAttachThreshold float64 `yaml:"auto_attach_threshold"`
-	RequireModelMatch   bool    `yaml:"require_model_match"`
+	Enabled             *bool      `yaml:"enabled"`
+	SkipIfExists        bool       `yaml:"skip_if_exists"`
+	AutoAttachThreshold float64    `yaml:"auto_attach_threshold"`
+	RequireModelMatch   bool       `yaml:"require_model_match"`
+	Classes             []DocClass `yaml:"classes"`
+}
+
+// DocClass is one fetchable document kind (manual, parts, quickstart…). Each
+// class selects its OWN best candidate and attaches independently, so an
+// appliance gets both a manual and a parts list instead of one competing for
+// a single slot. Classification is by keyword match on the candidate's
+// url/title/snippet; category gating limits a class to relevant item types.
+type DocClass struct {
+	Name       string   `yaml:"name"`       // ledger doc_class + notes verb ("manual", "parts")
+	Field      string   `yaml:"field"`      // custom-field label ("Manual" -> "Manual"/"Manual (web)")
+	AttachAs   string   `yaml:"attach_as"`  // Homebox attachment type (manual|attachment|warranty)
+	Keywords   []string `yaml:"keywords"`   // classify + page-follow harvest keep-set + query hints
+	Queries    []string `yaml:"queries"`    // {subject} search templates for the web stages
+	Categories []string `yaml:"categories"` // only fetch for items whose tags match one of these; empty = all
+	Enabled    bool     `yaml:"enabled"`
 }
 
 // DocsEnabled resolves the docs provider toggle (default true).
 func (c *Config) DocsEnabled() bool {
 	return c.Curation.Docs.Enabled == nil || *c.Curation.Docs.Enabled
+}
+
+// defaultDocClasses is used when the property file defines none. manual keeps
+// today's behavior; parts is category-gated to appliances/tools so earbuds
+// never fetch a parts list; quickstart/datasheet are defined but off.
+func defaultDocClasses() []DocClass {
+	return []DocClass{
+		{
+			Name: "manual", Field: "Manual", AttachAs: "manual", Enabled: true,
+			Keywords: []string{"manual", "guide", "owner", "use and care", "use & care", "instruction", "user", "handbook", "knowledge-download", "_um", "_ug"},
+			Queries:  []string{"{subject} user manual filetype:pdf", "{subject} owner's manual pdf"},
+		},
+		{
+			Name: "parts", Field: "Parts", AttachAs: "attachment", Enabled: true,
+			Keywords:   []string{"parts", "parts list", "parts diagram", "exploded", "spare", "schematic", "service manual", "repair"},
+			Queries:    []string{"{subject} parts list filetype:pdf", "{subject} parts diagram pdf"},
+			Categories: []string{"appliance", "dishwasher", "washer", "dryer", "refrigerator", "fridge", "freezer", "oven", "range", "stove", "microwave", "hvac", "furnace", "water heater", "tool", "mower", "vacuum", "grill"},
+		},
+		{
+			Name: "quickstart", Field: "Quick start", AttachAs: "attachment", Enabled: false,
+			Keywords: []string{"quick start", "quickstart", "qsg", "quick setup", "getting started", "setup guide"},
+			Queries:  []string{"{subject} quick start guide filetype:pdf"},
+		},
+		{
+			Name: "datasheet", Field: "Datasheet", AttachAs: "attachment", Enabled: false,
+			Keywords: []string{"datasheet", "data sheet", "specification", "spec sheet", "technical data"},
+			Queries:  []string{"{subject} datasheet filetype:pdf"},
+		},
+	}
 }
 
 // Enrich configures metadata auto-completion. Fill-only by design.
@@ -187,8 +231,21 @@ func (c *Config) defaults() {
 	if c.LLM.BaseURL == "" {
 		c.LLM.BaseURL = "https://openrouter.ai/api/v1"
 	}
-	if c.Curation.Docs.DocType == "" {
-		c.Curation.Docs.DocType = "manual"
+	if len(c.Curation.Docs.Classes) == 0 {
+		c.Curation.Docs.Classes = defaultDocClasses()
+	}
+	for i := range c.Curation.Docs.Classes {
+		dc := &c.Curation.Docs.Classes[i]
+		if dc.Field == "" {
+			dc.Field = strings.Title(dc.Name) //nolint:staticcheck // ASCII class names
+		}
+		if dc.AttachAs == "" {
+			if dc.Name == "manual" {
+				dc.AttachAs = "manual"
+			} else {
+				dc.AttachAs = "attachment"
+			}
+		}
 	}
 	if c.Curation.Discovery.Language == "" {
 		c.Curation.Discovery.Language = "en"

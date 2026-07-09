@@ -61,7 +61,17 @@ type Candidate struct {
 	IsHTML      bool // manual page rather than a document file
 	Official    bool // hosted on the manufacturer's own domain
 	ModelMatch  bool
+	Class       string // doc class this candidate was classified into ("manual", "parts", …)
 	Score       float64
+}
+
+// DocClass is the discovery-side view of a document class: enough to classify
+// candidates, keep the right links during page-follow, and expand web queries.
+// The scanner owns the richer config (field label, attach type, categories).
+type DocClass struct {
+	Name     string
+	Keywords []string
+	Queries  []string
 }
 
 // Result is the discovery outcome for one item.
@@ -93,6 +103,7 @@ type Options struct {
 	MaxSnippetChars int
 	RequireModel    bool
 	RatePerMin      int
+	Classes         []DocClass // doc classes to classify into; empty => single "manual" class
 }
 
 type Engine struct {
@@ -102,6 +113,7 @@ type Engine struct {
 	reranker Reranker      // may be nil (rules-only)
 	verifier Verifier      // may be nil (no content verification)
 	brands   BrandResolver // may be nil (brand-site stage disabled)
+	docKeep  *regexp.Regexp
 
 	brandMu    sync.Mutex
 	brandCache map[string]string
@@ -120,12 +132,34 @@ func NewEngine(opt Options, reranker Reranker) *Engine {
 	if opt.StopConfidence == 0 {
 		opt.StopConfidence = 0.7
 	}
+	if len(opt.Classes) == 0 {
+		opt.Classes = []DocClass{{Name: "manual", Keywords: []string{"manual", "guide", "user", "instruction"}}}
+	}
 	return &Engine{
 		opt:      opt,
 		http:     &http.Client{Timeout: 30 * time.Second},
 		limiter:  newLimiter(opt.RatePerMin),
 		reranker: reranker,
+		docKeep:  buildKeepRe(opt.Classes),
 	}
+}
+
+// classOf classifies a candidate by keyword match on its url/title/snippet.
+// Non-default classes are checked first (a "parts" doc mentioning "manual"
+// must classify as parts); anything unmatched falls to the primary class.
+func (e *Engine) classOf(c *Candidate, primary string) string {
+	hay := strings.ToLower(c.Title + " " + c.URL + " " + c.Snippet)
+	for _, dc := range e.opt.Classes {
+		if dc.Name == primary {
+			continue
+		}
+		for _, kw := range dc.Keywords {
+			if kw = strings.ToLower(strings.TrimSpace(kw)); kw != "" && strings.Contains(hay, kw) {
+				return dc.Name
+			}
+		}
+	}
+	return primary
 }
 
 // browserUA: several vendor CDNs (HubSpot et al.) 403 Go's default UA on GET
@@ -136,28 +170,49 @@ var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
 func norm(s string) string { return nonAlnum.ReplaceAllString(strings.ToLower(s), "") }
 
-// renderQueries substitutes {manufacturer}/{modelNumber}/{name} in templates.
-func (e *Engine) renderQueries(it Item) []string {
+// renderTemplates substitutes {subject}/{manufacturer}/{modelNumber}/{name}
+// in query templates and de-duplicates the rendered result.
+func (e *Engine) renderTemplates(it Item, tmpls []string) []string {
 	r := strings.NewReplacer(
 		"{subject}", it.subject(),
 		"{manufacturer}", it.Manufacturer,
 		"{modelNumber}", it.ModelNumber,
 		"{name}", it.Name,
 	)
+	seen := map[string]bool{}
 	var out []string
-	for _, q := range e.opt.Queries {
-		out = append(out, strings.TrimSpace(r.Replace(q)))
+	for _, q := range tmpls {
+		q = strings.TrimSpace(r.Replace(q))
+		if q != "" && !seen[q] {
+			seen[q] = true
+			out = append(out, q)
+		}
 	}
 	return out
 }
 
-// Discover runs the source-priority pipeline for one item: stages execute in
-// the configured order and the first stage whose pick reaches StopConfidence
-// wins — official brand-site sources beat general web PDFs beat HTML pages.
-func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
-	requireModel := e.opt.RequireModel && strings.TrimSpace(it.ModelNumber) != ""
+// Discover gathers and classifies candidates across the source-priority
+// pipeline for one item. want is the set of doc-class names the caller intends
+// to attach (category-filtered by the scanner); the web stages run each
+// wanted class's query templates, and the pipeline stops early once the
+// PRIMARY class ("manual", or want[0]) has a clear winner — so most items
+// still resolve at the brand-site stage without touching general search.
+// Per-class selection happens in SelectClass; Discover leaves Best unset.
+func (e *Engine) Discover(ctx context.Context, it Item, want []string) (*Result, error) {
+	primary := primaryClass(want)
+
+	// Web-stage queries: the base templates plus every wanted class's own.
+	var tmpls []string
+	tmpls = append(tmpls, e.opt.Queries...)
+	for _, dc := range e.opt.Classes {
+		if contains(want, dc.Name) {
+			tmpls = append(tmpls, dc.Queries...)
+		}
+	}
+	queries := e.renderTemplates(it, tmpls)
 
 	var all []Candidate
+	lastStage := ""
 	for _, stage := range e.opt.Pipeline {
 		var cands []Candidate
 		switch stage {
@@ -166,9 +221,9 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 		case "brand-site":
 			cands = e.brandSiteCandidates(ctx, it)
 		case "web-pdf":
-			cands = e.webCandidates(ctx, it, true)
+			cands = e.webCandidates(ctx, it, true, queries)
 		case "web-html":
-			cands = e.webCandidates(ctx, it, false)
+			cands = e.webCandidates(ctx, it, false, queries)
 		default:
 			log.Printf("unknown pipeline stage %q — skipping", stage)
 		}
@@ -176,21 +231,61 @@ func (e *Engine) Discover(ctx context.Context, it Item) (*Result, error) {
 			continue
 		}
 		e.scoreCandidates(ctx, it, cands)
-		res := e.pick(ctx, it, cands, requireModel)
-		if res.Best != nil && res.Confidence >= e.opt.StopConfidence {
-			log.Printf("pipeline stage %q produced confident pick (%.2f)", stage, res.Confidence)
-			res.Stage = stage
-			res.Candidates = append(cands, all...)
-			res.BestHTML = bestHTML(res.Candidates)
-			return res, nil
+		for i := range cands {
+			cands[i].Class = e.classOf(&cands[i], primary)
 		}
 		all = append(all, cands...)
+		lastStage = stage
+
+		// Early stop: the primary class has an unambiguous winner in what we've
+		// gathered so far. Secondary classes (parts, etc.) ride on whatever the
+		// same stages already surfaced — brand-site page-follow harvests them
+		// alongside the manual — so we don't push into general search for them.
+		if _, ok := clearWinner(classSubset(all, primary)); ok {
+			log.Printf("pipeline stage %q: primary class %q has a clear winner; stopping", stage, primary)
+			break
+		}
 	}
 
-	// No stage was confident: final pick across everything + HTML fallback.
-	res := e.pick(ctx, it, all, requireModel)
-	res.BestHTML = bestHTML(all)
-	return res, nil
+	return &Result{Candidates: all, Stage: lastStage}, nil
+}
+
+// SelectClass runs the selection ladder over one class's candidates, producing
+// the per-class attach/link decision (Best PDF, BestHTML link fallback,
+// confidence). Called once per enabled class by the scanner.
+func (e *Engine) SelectClass(ctx context.Context, it Item, cands []Candidate, class string) *Result {
+	requireModel := e.opt.RequireModel && strings.TrimSpace(it.ModelNumber) != ""
+	sub := classSubset(cands, class)
+	res := e.pick(ctx, it, sub, requireModel)
+	res.BestHTML = bestHTML(sub)
+	res.Stage = class
+	return res
+}
+
+func primaryClass(want []string) string {
+	if contains(want, "manual") || len(want) == 0 {
+		return "manual"
+	}
+	return want[0]
+}
+
+func classSubset(cands []Candidate, class string) []Candidate {
+	out := make([]Candidate, 0, len(cands))
+	for _, c := range cands {
+		if c.Class == class {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // pick applies the existing selection ladder to one candidate set:

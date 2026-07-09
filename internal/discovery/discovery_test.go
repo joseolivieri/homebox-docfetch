@@ -2,14 +2,27 @@ package discovery
 
 import "testing"
 
-func TestRenderQueries(t *testing.T) {
-	e := NewEngine(Options{Queries: []string{
-		"{manufacturer} {modelNumber} user manual filetype:pdf",
-		"{name} datasheet",
-	}}, nil)
-	got := e.renderQueries(Item{Manufacturer: "Acme", ModelNumber: "W-1", Name: "Widget"})
+func TestRenderTemplates(t *testing.T) {
+	e := NewEngine(Options{}, nil)
+	tmpls := []string{"{manufacturer} {modelNumber} user manual filetype:pdf", "{name} datasheet"}
+	got := e.renderTemplates(Item{Manufacturer: "Acme", ModelNumber: "W-1", Name: "Widget"}, tmpls)
 	if got[0] != "Acme W-1 user manual filetype:pdf" || got[1] != "Widget datasheet" {
 		t.Fatalf("bad render: %#v", got)
+	}
+}
+
+func TestClassOf(t *testing.T) {
+	e := NewEngine(Options{Classes: []DocClass{
+		{Name: "manual", Keywords: []string{"manual", "guide"}},
+		{Name: "parts", Keywords: []string{"parts", "exploded"}},
+	}}, nil)
+	parts := &Candidate{URL: "https://x.com/dishwasher-parts-list.pdf", Title: "Parts List"}
+	if got := e.classOf(parts, "manual"); got != "parts" {
+		t.Fatalf("expected parts, got %q", got)
+	}
+	man := &Candidate{URL: "https://x.com/owner-manual.pdf", Title: "User Guide"}
+	if got := e.classOf(man, "manual"); got != "manual" {
+		t.Fatalf("expected manual, got %q", got)
 	}
 }
 

@@ -45,20 +45,20 @@ func (s *Scanner) SetCuration(cs CurationSearch, v Vision, visionModel string) {
 // attachApproved fulfils a one-tap approval queued in the notes block by the
 // portal's Attach button. No content verification — a human approved this
 // exact URL. Errors bubble up so the item retries on the next pass.
-func (s *Scanner) attachApproved(ctx context.Context, detail *homebox.EntityOut, url string, base *store.Record) error {
+func (s *Scanner) attachApproved(ctx context.Context, detail *homebox.EntityOut, url string, base *store.Record, dc DocClassCfg) error {
 	data, err := s.disc.Download(ctx, url, s.cfg.MaxPDFBytes)
 	if err != nil {
 		return fmt.Errorf("approved download %s: %w", url, err)
 	}
-	updated, err := s.api.UploadAttachment(ctx, detail.ID, filename(detail), s.cfg.DocType, false, bytes.NewReader(data))
+	updated, err := s.api.UploadAttachment(ctx, detail.ID, filename(detail, dc), dc.AttachAs, false, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		n := notes.Append(updated.Notes, notes.Line("manual attached via approve "+notes.MDLink("pdf", url)))
+		n := notes.Append(updated.Notes, notes.Line(dc.Name+" attached via approve "+notes.MDLink("pdf", url)))
 		upd.Notes = &n
-		upd.Fields = homebox.UpsertField(upd.Fields, "Manual", notes.MDLink("pdf", url))
+		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", url))
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("approve note put %s: %v", detail.ID, err)
 		}
