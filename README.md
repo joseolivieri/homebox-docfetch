@@ -12,8 +12,9 @@ The stages share nothing but Homebox itself; the entity notes block is the bus b
 
 This repo holds the service source, its container/compose, and its design docs. It is
 deployment-agnostic: run it anywhere `docker compose` works, configured via `config.yaml`
-(see `config.example.yaml`) plus secrets from env. One reference deployment exists as the
-`docfetch` Ansible role in the author's private homelab repo.
+(see `config.example.yaml`) plus secrets from env. CI publishes a linux/amd64 image to
+`ghcr.io/joseolivieri/homebox-docfetch` (`latest` on main, semver on `v*` tags). One
+reference deployment exists as the `docfetch` Ansible role in the author's private homelab repo.
 
 **New here? Start with [`docs/how-it-works.md`](docs/how-it-works.md)** — a plain-language
 walkthrough of the whole pipeline (intake, enrichment, manual discovery, review gate, learning loop).
