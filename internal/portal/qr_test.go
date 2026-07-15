@@ -8,7 +8,7 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
 func qrPNG(t *testing.T, content string) []byte {

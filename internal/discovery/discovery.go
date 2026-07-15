@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
 // Item is the identity we search on.

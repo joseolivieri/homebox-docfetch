@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/config"
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
 //go:embed static

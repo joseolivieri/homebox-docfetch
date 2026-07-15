@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
 // fakeSearx serves SearXNG-style JSON and a PDF endpoint for HEAD probes.

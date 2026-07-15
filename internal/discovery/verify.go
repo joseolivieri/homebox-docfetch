@@ -8,7 +8,7 @@ import (
 
 	"github.com/ledongthuc/pdf"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
 // Verifier reads a document excerpt into structured identity facts (satisfied

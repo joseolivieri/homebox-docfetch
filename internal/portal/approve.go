@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/scheduler"
+	"github.com/joseolivieri/homebox-docfetch/internal/notes"
+	"github.com/joseolivieri/homebox-docfetch/internal/scheduler"
 )
 
 // The ntfy review-gate buttons land here. Both handlers follow the intake

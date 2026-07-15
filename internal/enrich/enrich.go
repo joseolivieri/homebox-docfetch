@@ -15,8 +15,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 )
 
 // Searcher provides raw search results (satisfied by discovery.Engine via a

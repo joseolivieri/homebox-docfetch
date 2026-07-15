@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 )
 
 // handleCreate commits a confirmed intake: creates the entity, PUTs metadata,

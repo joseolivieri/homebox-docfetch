@@ -1,4 +1,4 @@
-module github.com/joseolivieri/homelab/homebox-docfetch
+module github.com/joseolivieri/homebox-docfetch
 
 go 1.26
 

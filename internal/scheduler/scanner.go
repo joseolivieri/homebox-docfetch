@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notify"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/store"
+	"github.com/joseolivieri/homebox-docfetch/internal/discovery"
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homebox-docfetch/internal/notes"
+	"github.com/joseolivieri/homebox-docfetch/internal/notify"
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 // EntityAPI is the subset of the Homebox client the scanner needs.

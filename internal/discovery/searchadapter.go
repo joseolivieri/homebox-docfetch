@@ -3,7 +3,7 @@ package discovery
 import (
 	"context"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/enrich"
+	"github.com/joseolivieri/homebox-docfetch/internal/enrich"
 )
 
 // Search exposes raw SearXNG results (rate-limited) for the enrich engine and

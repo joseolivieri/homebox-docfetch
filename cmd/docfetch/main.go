@@ -18,8 +18,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homebox-docfetch/internal/config"
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
 )
 
 var version = "0.0.1-dev"

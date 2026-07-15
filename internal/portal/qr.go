@@ -12,7 +12,7 @@ import (
 	"github.com/makiuchi-d/gozxing/multi/qrcode"
 	_ "golang.org/x/image/webp"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
 // decodeQRs extracts http(s) URLs from QR codes in the intake photos —

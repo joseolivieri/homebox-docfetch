@@ -10,8 +10,10 @@ through its REST API — **no UI integration, no DB access**. Two discrete stage
 
 The stages share nothing but Homebox itself; the entity notes block is the bus between them.
 
-This directory holds the service source, its container/compose, and its design docs. The Ansible
-deployment role lives separately at `ansible/roles/docfetch/` (follows the `homebox` role pattern).
+This repo holds the service source, its container/compose, and its design docs. It is
+deployment-agnostic: run it anywhere `docker compose` works, configured via `config.yaml`
+(see `config.example.yaml`) plus secrets from env. One reference deployment exists as the
+`docfetch` Ansible role in the author's private homelab repo.
 
 **New here? Start with [`docs/how-it-works.md`](docs/how-it-works.md)** — a plain-language
 walkthrough of the whole pipeline (intake, enrichment, manual discovery, review gate, learning loop).
@@ -51,7 +53,7 @@ homebox-docfetch/
 - **Core is packages, not a monolith.** Both entrypoints (`scheduler`, `portal`) share `internal/*`.
   Phase 2 adds `internal/portal` + a vision code path in `internal/llm` and nothing else structural.
 - **Config is a property file.** Everything schedule/threshold/tag-related is config, never hardcoded.
-  Secrets (tokens/keys) come from env, injected by Ansible from `ansible/secrets.yml` (vault).
-- **Deploy the homelab way.** New `docfetch` Ansible role, deploy dir + `.env` from vault + `docker_compose_v2`.
-  Update `docs/architecture.md` in the same commit as any service/hostname/tier change (repo CLAUDE.md rule).
+  Secrets (tokens/keys) come from env only — never from the config file, never committed.
+- **Deployment lives elsewhere.** This repo ships source + Dockerfile + compose; site-specific
+  deployment (Ansible, secrets injection, ingress) belongs to the deploying repo, not here.
 - **Idempotent + cheap.** Diff, don't re-sweep. Cache negative results. Content-hash dedupe. Rate-limit egress.

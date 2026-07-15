@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/enrich"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notes"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/store"
+	"github.com/joseolivieri/homebox-docfetch/internal/discovery"
+	"github.com/joseolivieri/homebox-docfetch/internal/enrich"
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/notes"
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 // CurationSearch is the web-search surface curation needs (SearXNG-backed).

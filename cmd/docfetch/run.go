@@ -6,15 +6,15 @@ import (
 	"log"
 	"strings"
 
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/config"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/discovery"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/enrich"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/llm"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/notify"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/portal"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/scheduler"
-	"github.com/joseolivieri/homelab/homebox-docfetch/internal/store"
+	"github.com/joseolivieri/homebox-docfetch/internal/config"
+	"github.com/joseolivieri/homebox-docfetch/internal/discovery"
+	"github.com/joseolivieri/homebox-docfetch/internal/enrich"
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
+	"github.com/joseolivieri/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/notify"
+	"github.com/joseolivieri/homebox-docfetch/internal/portal"
+	"github.com/joseolivieri/homebox-docfetch/internal/scheduler"
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 // deps bundles the assembled components so both the scheduler and the portal
