@@ -6,3 +6,6 @@ data/
 # build output
 /docfetch
 /dist/
+
+# Author-local deployment context
+CLAUDE.local.md
