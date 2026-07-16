@@ -9,9 +9,11 @@ through its REST API — **no UI integration, no DB access**. Two discrete stage
   web egress: metadata enrichment, manual fetching, official photos, warranty, tagging.
 
 Both stages run in one process (`docfetch serve`, D25); the egress boundary is enforced at
-the package level (`internal/portal` imports no discovery/egress code). The entity notes
-block is currently the bus between them (moving to a shared event store — see
-[`docs/plan-architecture-v2.md`](docs/plan-architecture-v2.md)).
+the package level (`internal/portal` imports no discovery/egress code). A shared sqlite
+event store is the bus between them (D26): signals (qr/approve/reject) and the full audit
+trail are events, browsable at the portal's `/log` pages or via `docfetch log`; entity
+notes carry a one-line breadcrumb. See
+[`docs/plan-architecture-v2.md`](docs/plan-architecture-v2.md).
 
 This repo holds the service source, its container/compose, and its design docs. It is
 deployment-agnostic: run it anywhere `docker compose` works, configured via `config.yaml`

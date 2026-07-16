@@ -83,7 +83,10 @@ CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);`)
 	if err := s.migrateEnrich(); err != nil {
 		return err
 	}
-	return s.migrateDecisions()
+	if err := s.migrateDecisions(); err != nil {
+		return err
+	}
+	return s.migrateEvents()
 }
 
 // MetaHash is the identity fingerprint. When it changes for a known entity, the

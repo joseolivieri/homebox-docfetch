@@ -33,6 +33,16 @@ func (s *Scanner) Reconcile(ctx context.Context) error {
 	}
 	s.sweepOverrides(ctx)
 
+	// Retention: audit events age out; signal events (qr/approve/reject) are
+	// permanent state and exempt (D27).
+	if s.cfg.EventRetention > 0 {
+		if n, err := s.store.PruneEvents(ctx, time.Now().Add(-s.cfg.EventRetention)); err != nil {
+			log.Printf("reconcile: prune events: %v", err)
+		} else if n > 0 {
+			log.Printf("reconcile: pruned %d old events", n)
+		}
+	}
+
 	list, err := s.api.ListEntities(ctx, 1, 1, []string{s.unverifiedTagID})
 	if err != nil {
 		return err
@@ -115,6 +125,7 @@ func (s *Scanner) sweepOverrides(ctx context.Context) {
 			if n, _ := s.store.LabelDecisions(ctx, rec.EntityID, rec.DocURL, store.LabelRejected, "override"); n > 0 {
 				log.Printf("override: %q removed manual %s — labeled rejected", detail.Name, rec.DocURL)
 			}
+			s.event(ctx, detail, store.EvSweepRemoved, s.cfg.manualClass().Name, rec.DocURL, "user removed doc; rejected + retry")
 			rec.Status = store.StatusNew
 			rec.Attempts = 0
 			rec.DocURL, rec.DocSHA256, rec.LastAttached = "", "", nil

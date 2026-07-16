@@ -11,9 +11,12 @@ separated stages, one process (`docfetch serve`, D25):
   web egress: metadata enrichment (fill-only, corroborated), per-class document fetching
   (manual/parts/quickstart/datasheet), official photos, warranty, tagging.
 
-The entity **notes block** is currently the bus between them
-(`- qr/rejected/approved [label](url)` semantic lines, `internal/notes`); it is being
-replaced by a shared sqlite event store — see `docs/plan-architecture-v2.md` (M2/D26).
+The **shared sqlite event store** is the bus between them (M2/D26, `internal/store/events.go`):
+qr/approve/reject are deduped signal events; the portal `trigger`s immediate scanner
+processing (DB writes don't bump `updatedAt`, so the change-poll can't see them). Entity
+notes carry only a one-line breadcrumb (`internal/notes` `Breadcrumb`). Activity log:
+portal `/log` pages or `docfetch log`. Legacy notes-bus lines are still imported
+(split-mode transition; dies at M3) — see `docs/plan-architecture-v2.md`.
 
 ## Read order (before touching code)
 

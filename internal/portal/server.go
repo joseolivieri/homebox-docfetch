@@ -8,8 +8,8 @@
 // that searches or downloads from the web — metadata enrichment, docs,
 // official photos, warranty lookups — belongs to the curation stage (the
 // scanner), which picks a new item up within ~change_poll seconds. The ntfy
-// Attach/Reject buttons follow the same rule: they only write queued
-// approved/rejected lines into the entity's notes block for the scanner.
+// Attach/Reject buttons follow the same rule: they record doc.approve /
+// doc.reject signal events for the scanner to fulfil (M2/D26).
 package portal
 
 import (
@@ -27,6 +27,7 @@ import (
 	"github.com/joseolivieri/homebox-docfetch/internal/config"
 	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homebox-docfetch/internal/llm"
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 //go:embed static
@@ -38,13 +39,27 @@ type Server struct {
 	cfg *config.Config
 	hb  *homebox.Client
 	ai  *llm.Client
+	st  *store.Store
+
+	// trigger, when set (serve mode), asks the scanner to process an entity
+	// now — replaces relying on the change-poll noticing our Homebox writes.
+	// The portal only signals; all egress still happens in the scanner.
+	trigger func(entityID string)
+
+	// legacyNotes keeps writing qr/approved/rejected notes lines alongside
+	// events. Set in the deprecated split-mode `portal` subcommand, where the
+	// scanner runs in another container and cannot see this store; the scanner
+	// imports the lines into events. Dies with split mode (M3).
+	legacyNotes bool
 
 	unverifiedTagID string
 	provenanceTagID string
 }
 
-func New(cfg *config.Config, hb *homebox.Client, ai *llm.Client) *Server {
-	return &Server{cfg: cfg, hb: hb, ai: ai}
+// New builds the portal server. st is the shared event store; trigger (may be
+// nil) requests immediate scanner processing of an entity.
+func New(cfg *config.Config, hb *homebox.Client, ai *llm.Client, st *store.Store, trigger func(entityID string), legacyNotes bool) *Server {
+	return &Server{cfg: cfg, hb: hb, ai: ai, st: st, trigger: trigger, legacyNotes: legacyNotes}
 }
 
 // Run bootstraps tags and serves until ctx is done.
@@ -65,6 +80,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/create", s.handleCreate)
 	mux.HandleFunc("/api/approve", s.handleApprove)
 	mux.HandleFunc("/api/reject", s.handleReject)
+	mux.HandleFunc("/log", s.handleLog)
+	mux.HandleFunc("/log/", s.handleLog)
 
 	srv := &http.Server{
 		Addr:              s.cfg.Intake.Listen,

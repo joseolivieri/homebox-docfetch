@@ -252,8 +252,8 @@ new interface needed (§3.2).
 
 | # | Scope | Risk |
 |---|---|---|
-| **M1** | `serve` subcommand (scheduler + portal, one process); compose collapses to docfetch+searxng; deprecate split subcommands; arm64 image. No behavior change otherwise. | Low |
-| **M2** | `events` table + synchronous event writes at all decision points; DB replaces notes bus (qr/rejected/approved); one-time notes importer; breadcrumb line (default on); portal `/log` pages + `docfetch log`; change-poll cursor persisted. | Medium — touches scanner/portal handoff; gated by golden-path live test |
+| **M1** ✅ (D25) | `serve` subcommand (scheduler + portal, one process); compose collapses to docfetch+searxng; deprecate split subcommands; arm64 image. No behavior change otherwise. | Low |
+| **M2** ✅ (D26/D27) | `events` table + synchronous event writes at all decision points; DB replaces notes bus (qr/rejected/approved) with portal→scanner trigger; idempotent notes importer (transition); breadcrumb line (default on); portal `/log` pages + `docfetch log`; change-poll cursor persisted. | Medium — touches scanner/portal handoff; gated by golden-path live test |
 | **M3** | Provider seams: SearchProvider (searxng only), notifier URL scheme, Ollama-verified LLM path + degradation matrix; **upstream entity-API parity audit** (§3.1) + spec.md update; migrations framework; healthz/metrics/check; config minimization. | Low-medium |
 | **M4** | Public-release prep: quickstart docs, setup-variance matrix, semver v1.0 tag, backup guidance, README for external users. **Release gate.** | Low |
 | **M5** | Learning Phase B: golden-set replay harness off events+decisions. C–D remain deferred. Legacy-Homebox adapter only if demand materializes. | Low |

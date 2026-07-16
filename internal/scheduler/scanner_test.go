@@ -373,3 +373,74 @@ func TestSkimPromotesGatedCandidate(t *testing.T) {
 		t.Fatalf("expected attached, got %s", rec.Status)
 	}
 }
+
+func TestNotesImportBecomesEvents(t *testing.T) {
+	d := detail("e1", "Acme", "W-1")
+	d.Notes = "<!--docfetch-->\n#### docfetch\n- 2026-07-01 qr [link](https://acme.example/p)\n- 2026-07-02 rejected [link](http://x/bad.pdf)\n<!--/docfetch-->"
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": d},
+	}
+	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/m.pdf", ModelMatch: true}, Confidence: 0.9}, body: []byte("%PDF-1.4")}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	qr, _ := st.EventURLs(context.Background(), "e1", store.EvQRLink)
+	if len(qr) != 1 || qr[0] != "https://acme.example/p" {
+		t.Fatalf("qr notes line not imported: %v", qr)
+	}
+	rej, _ := st.EventURLs(context.Background(), "e1", store.EvDocReject)
+	if len(rej) != 1 || rej[0] != "http://x/bad.pdf" {
+		t.Fatalf("rejected notes line not imported: %v", rej)
+	}
+}
+
+func TestRejectedEventFiltersCandidate(t *testing.T) {
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+	}
+	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/bad.pdf", ModelMatch: true}, Confidence: 0.9}, body: []byte("%PDF-1.4")}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+	_ = st.AppendEvent(context.Background(), &store.Event{
+		EntityID: "e1", Kind: store.EvDocReject, URL: "http://x/bad.pdf", Actor: store.ActorUser,
+	})
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatal("rejected URL must never attach")
+	}
+}
+
+func TestApproveEventFulfilled(t *testing.T) {
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+	}
+	disc := &fakeDisc{body: []byte("%PDF-1.4 approved doc")}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+	_ = st.AppendEvent(context.Background(), &store.Event{
+		EntityID: "e1", Kind: store.EvDocApprove, URL: "http://x/human-approved.pdf", Actor: store.ActorUser,
+	})
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("approve event must attach, uploads=%d", api.uploads)
+	}
+	if disc.discCalls != 0 {
+		t.Fatal("approved URL must skip discovery")
+	}
+	rec, _ := st.Get(context.Background(), "e1")
+	if rec.Status != store.StatusAttached || rec.DocURL != "http://x/human-approved.pdf" {
+		t.Fatalf("record not updated: %+v", rec)
+	}
+}

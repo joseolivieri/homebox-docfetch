@@ -56,13 +56,13 @@ func (s *Scanner) attachApproved(ctx context.Context, detail *homebox.EntityOut,
 	}
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		n := notes.Append(updated.Notes, notes.Line(dc.Name+" attached via approve "+notes.MDLink("pdf", url)))
-		upd.Notes = &n
+		s.setBreadcrumb(&upd, updated.Notes, updated, dc.Name)
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", url))
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("approve note put %s: %v", detail.ID, err)
 		}
 	}
+	s.event(ctx, detail, store.EvDocAttach, dc.Name, url, "via approve")
 	_, _ = s.store.LabelDecisions(ctx, detail.ID, url, store.LabelConfirmed, "ntfy")
 	log.Printf("manual attached via approve for %q — %s", detail.Name, url)
 	t := time.Now()
@@ -112,7 +112,7 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 	rejected, _ := s.store.RejectedURLs(ctx, detail.ID, "photo")
 
 	// Stage 1: og:image from known official pages.
-	for _, page := range s.officialPages(detail) {
+	for _, page := range s.officialPages(ctx, detail) {
 		og, err := s.curSearch.OGImage(ctx, page, 10<<20)
 		if err != nil || og == nil || rejected[og.Src] {
 			continue
@@ -177,12 +177,14 @@ func (s *Scanner) attachPhoto(ctx context.Context, detail *homebox.EntityOut, ch
 
 	if fresh, err := s.api.GetEntity(ctx, detail.ID); err == nil {
 		upd := fullUpdateFrom(fresh)
-		n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("photo (%.2f, %s) %s", conf, stage, notes.MDLink("src", chosen.Src))))
-		upd.Notes = &n
-		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
-			log.Printf("photo %s: note put: %v", detail.ID, err)
+		s.setBreadcrumb(&upd, fresh.Notes, fresh, "photo")
+		if upd.Notes != nil { // breadcrumb changed; otherwise skip the PUT entirely
+			if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
+				log.Printf("photo %s: note put: %v", detail.ID, err)
+			}
 		}
 	}
+	s.event(ctx, detail, store.EvPhotoAttach, "photo", chosen.Src, fmt.Sprintf("conf=%.2f stage=%s", conf, stage))
 	err := s.store.RecordDecision(ctx, &store.Decision{
 		EntityID: detail.ID, EntityName: detail.Name, DocClass: "photo",
 		Stage: stage, Outcome: "attached", ChosenURL: chosen.Src, Confidence: conf,
@@ -193,8 +195,8 @@ func (s *Scanner) attachPhoto(ctx context.Context, detail *homebox.EntityOut, ch
 }
 
 // officialPages lists pages with manufacturer provenance already on the item:
-// label QR targets and the linked official manual page.
-func (s *Scanner) officialPages(detail *homebox.EntityOut) []string {
+// label QR targets (qr.link events) and the linked official manual page.
+func (s *Scanner) officialPages(ctx context.Context, detail *homebox.EntityOut) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(u string) {
@@ -203,7 +205,8 @@ func (s *Scanner) officialPages(detail *homebox.EntityOut) []string {
 			out = append(out, u)
 		}
 	}
-	for _, u := range notes.QRURLs(detail.Notes) {
+	qr, _ := s.store.EventURLs(ctx, detail.ID, store.EvQRLink)
+	for _, u := range qr {
 		add(u)
 	}
 	add(notes.Target(homebox.FieldValue(detail.Fields, "Manual (web)")))
@@ -299,15 +302,13 @@ func (s *Scanner) curateWarranty(ctx context.Context, detail *homebox.EntityOut)
 	default:
 		return
 	}
-	if s.cfg.AuditLog && auditLine != "" {
-		n := notes.Append(fresh.Notes, notes.Line(auditLine))
-		upd.Notes = &n
-	}
+	s.setBreadcrumb(&upd, fresh.Notes, fresh, "warranty")
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		log.Printf("warranty put %s: %v", detail.ID, err)
 		return
 	}
 	log.Printf("warranty %s: months=%d lifetime=%v (conf=%.2f)", detail.Name, est.Months, est.Lifetime, est.Confidence)
+	s.event(ctx, detail, store.EvWarrantySet, "warranty", est.Source, auditLine)
 	s.recordClass(ctx, detail, "warranty", "attached", est.Source, est.Confidence)
 }
 

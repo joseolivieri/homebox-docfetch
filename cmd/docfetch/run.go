@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/joseolivieri/homebox-docfetch/internal/config"
 	"github.com/joseolivieri/homebox-docfetch/internal/discovery"
@@ -90,7 +91,8 @@ func build(cfg *config.Config) (*deps, error) {
 		PhotoEnabled:        cur.Photo.Enabled,
 		PhotoMinConfidence:  cur.Photo.MinConfidence,
 		WarrantyEnabled:     cur.Warranty.Enabled,
-		AuditLog:            cfg.Notes.AuditLog,
+		Breadcrumb:          cfg.Notes.BreadcrumbEnabled(),
+		EventRetention:      time.Duration(cfg.Notes.EventRetentionDays) * 24 * time.Hour,
 	})
 
 	// Metadata enrichment + curation extras need search plus an LLM.
@@ -159,9 +161,21 @@ func runServe(ctx context.Context, cfgPath string) error {
 	// Either half exiting (error or clean ctx shutdown) stops the other.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Portal signals (approve/reject/new intake) trigger immediate scanner
+	// processing — the DB bus doesn't bump Homebox updatedAt, so the
+	// change-poll can't see it (M2/D26). Egress stays in the scanner.
+	trigger := func(entityID string) {
+		go func() {
+			if err := d.sc.ProcessEntity(ctx, entityID); err != nil {
+				log.Printf("portal-triggered process %s: %v", entityID, err)
+			}
+		}()
+	}
+
 	errc := make(chan error, 2)
 	go func() { errc <- scheduler.Run(ctx, d.sc, specsFrom(cfg)) }()
-	go func() { errc <- portal.New(cfg, d.hb, d.ai).Run(ctx) }()
+	go func() { errc <- portal.New(cfg, d.hb, d.ai, d.st, trigger, false).Run(ctx) }()
 	err = <-errc
 	cancel()
 	if err2 := <-errc; err == nil {
@@ -210,5 +224,40 @@ func runPortal(ctx context.Context, cfgPath string) error {
 		return fmt.Errorf("portal requires an LLM key (vision extraction)")
 	}
 	// Intake stage: homebox + vision only — no discovery engine, no scanner.
-	return portal.New(cfg, d.hb, d.ai).Run(ctx)
+	// Split mode: no trigger, and legacyNotes=true rides the notes bus so the
+	// scanner in the other container still sees qr/approve/reject signals.
+	return portal.New(cfg, d.hb, d.ai, d.st, nil, true).Run(ctx)
+}
+
+// runLog prints recent activity events (the CLI face of the portal /log page).
+func runLog(ctx context.Context, cfgPath, entityID string, limit int) error {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(cfg.StateDB)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	events, err := st.Events(ctx, entityID, limit)
+	if err != nil {
+		return err
+	}
+	for i := len(events) - 1; i >= 0; i-- { // oldest first for terminal reading
+		e := events[i]
+		name := e.EntityName
+		if name == "" {
+			name = e.EntityID
+		}
+		line := fmt.Sprintf("%s  %-14s %-22s %s", e.Ts.Format("2006-01-02 15:04"), e.Kind, name, e.Detail)
+		if e.URL != "" {
+			line += " " + e.URL
+		}
+		fmt.Println(strings.TrimSpace(line))
+	}
+	if len(events) == 0 {
+		fmt.Println("no events")
+	}
+	return nil
 }

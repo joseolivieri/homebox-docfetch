@@ -7,16 +7,18 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homebox-docfetch/internal/notes"
-	"github.com/joseolivieri/homebox-docfetch/internal/scheduler"
+	"github.com/joseolivieri/homebox-docfetch/internal/sign"
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 // The ntfy review-gate buttons land here. Both handlers follow the intake
 // stage's boundary rule (vision-only remote calls): neither downloads
-// anything. They write a queued "approved"/"rejected" line into the entity's
-// docfetch notes block — Homebox is the shared bus between the two stages —
-// and the scanner acts on it within ~change_poll seconds (the notes PUT bumps
-// updatedAt, which trips the change-poll).
+// anything. They record a doc.approve / doc.reject signal event in the shared
+// store (M2/D26) and nudge the scanner to act now. In deprecated split mode
+// (legacyNotes) they additionally write the old notes-bus line, which the
+// scanner in the other container imports.
 
 // verifyAction checks the HMAC-signed (action, entity, url) triple common to
 // the one-tap ntfy endpoints. Returns ("", "") after writing the error.
@@ -28,7 +30,7 @@ func (s *Server) verifyAction(w http.ResponseWriter, r *http.Request, action str
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("missing id/url/sig"))
 		return "", ""
 	}
-	want := scheduler.ActionSig(action, id, docURL, s.cfg.Homebox.Token)
+	want := sign.ActionSig(action, id, docURL, s.cfg.Homebox.Token)
 	if !hmac.Equal([]byte(want), []byte(sig)) {
 		writeErr(w, http.StatusForbidden, fmt.Errorf("bad signature"))
 		return "", ""
@@ -36,21 +38,21 @@ func (s *Server) verifyAction(w http.ResponseWriter, r *http.Request, action str
 	return id, docURL
 }
 
-// handleApprove queues a one-tap approval: "approved [pdf](url)". The scanner
-// downloads and attaches the exact approved URL on its next pass (skipping
-// content verification — a human approved it) and records the confirmation
-// label in the learning ledger.
+// handleApprove records a one-tap approval (doc.approve event). The scanner
+// downloads and attaches the exact approved URL (skipping content
+// verification — a human approved it) and records the confirmation label in
+// the learning ledger.
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	s.queueAction(w, r, "approve", "approved", "pdf", "manual approved — attaching shortly")
+	s.queueAction(w, r, "approve", store.EvDocApprove, "approved", "pdf", "manual approved — attaching shortly")
 }
 
-// handleReject queues a permanent negative label: "rejected [link](url)".
-// The scanner ingests it, never proposes the URL again, and re-searches.
+// handleReject records a permanent negative label (doc.reject event). The
+// scanner never proposes the URL again and re-searches.
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
-	s.queueAction(w, r, "reject", "rejected", "link", "candidate rejected")
+	s.queueAction(w, r, "reject", store.EvDocReject, "rejected", "link", "candidate rejected")
 }
 
-func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, keyword, label, okMsg string) {
+func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, kind, keyword, label, okMsg string) {
 	id, docURL := s.verifyAction(w, r, action)
 	if id == "" {
 		return
@@ -62,9 +64,7 @@ func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, key
 		return
 	}
 	// Idempotent: a second tap (or an already-attached manual) is a no-op.
-	existing := notes.RejectedURLs(detail.Notes)
-	if keyword == "approved" {
-		existing = notes.ApprovedURLs(detail.Notes)
+	if kind == store.EvDocApprove {
 		for _, a := range detail.Attachments {
 			if a.Type == "manual" {
 				respondAction(w, r, detail.Name, "manual already attached")
@@ -72,18 +72,33 @@ func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, key
 			}
 		}
 	}
-	for _, u := range existing {
-		if u == docURL {
-			respondAction(w, r, detail.Name, "already "+keyword)
+	if existing, err := s.st.EventURLs(ctx, id, kind); err == nil {
+		for _, u := range existing {
+			if u == docURL {
+				respondAction(w, r, detail.Name, "already "+keyword)
+				return
+			}
+		}
+	}
+	if err := s.st.AppendEvent(ctx, &store.Event{
+		EntityID: id, EntityName: detail.Name, Actor: store.ActorUser,
+		Kind: kind, URL: docURL, Detail: "ntfy button",
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if s.legacyNotes {
+		// Split mode: the scanner cannot see this store — ride the notes bus.
+		upd := homebox.FullUpdateFrom(detail)
+		n := notes.Append(detail.Notes, notes.Line(keyword+" "+notes.MDLink(label, docURL)))
+		upd.Notes = &n
+		if _, err := s.hb.PutEntity(ctx, id, upd); err != nil {
+			writeErr(w, http.StatusBadGateway, err)
 			return
 		}
 	}
-	upd := fullUpdate(detail)
-	n := notes.Append(detail.Notes, notes.Line(keyword+" "+notes.MDLink(label, docURL)))
-	upd.Notes = &n
-	if _, err := s.hb.PutEntity(ctx, id, upd); err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
+	if s.trigger != nil {
+		s.trigger(id)
 	}
 	log.Printf("%s queued for %q (%s) via ntfy button — %s", keyword, detail.Name, id, docURL)
 	respondAction(w, r, detail.Name, okMsg)

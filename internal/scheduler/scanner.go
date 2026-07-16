@@ -20,6 +20,7 @@ import (
 	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homebox-docfetch/internal/notify"
+	"github.com/joseolivieri/homebox-docfetch/internal/sign"
 	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
@@ -76,7 +77,13 @@ type Config struct {
 	PhotoEnabled       bool
 	PhotoMinConfidence float64
 	WarrantyEnabled    bool
-	AuditLog           bool
+
+	// Breadcrumb keeps a single status line (+ portal log link) in the entity
+	// notes; the full audit trail lives in the events table (M2/D26).
+	Breadcrumb bool
+	// EventRetention prunes audit events older than this in the weekly
+	// reconcile (0 = never). Signal events (qr/approve/reject) are never pruned.
+	EventRetention time.Duration
 }
 
 // manualClass returns the primary "manual" class config (synthesized if the
@@ -215,6 +222,10 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		return err
 	}
 
+	// Legacy notes-bus lines (hand-written, or a split-mode portal) become
+	// events before anything reads or rewrites the notes block.
+	s.importNotes(ctx, detail)
+
 	base := &store.Record{
 		EntityID:    sum.ID,
 		Name:        detail.Name,
@@ -258,20 +269,22 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 
 	manual := s.cfg.manualClass()
 
-	// One-tap approval queued via the notes block (the portal makes no web
-	// calls — the Attach button just writes "approved [pdf](url)"). Fulfil it
-	// here: download + attach the exact URL the human approved, no discovery.
-	if approved := notes.ApprovedURLs(detail.Notes); len(approved) > 0 {
+	// One-tap approval queued as a doc.approve event (the portal makes no web
+	// calls — the Attach button just records the signal). Fulfil it here:
+	// download + attach the exact URL the human approved, no discovery. Skip
+	// once the manual is present — approve signals are permanent state.
+	if approved, _ := s.store.EventURLs(ctx, detail.ID, store.EvDocApprove); len(approved) > 0 && !hasDoc(detail, manual) {
 		return s.attachApproved(ctx, detail, approved[len(approved)-1], base, manual)
 	}
 
+	qrURLs, _ := s.store.EventURLs(ctx, detail.ID, store.EvQRLink)
 	item := discovery.Item{
 		Manufacturer: detail.Manufacturer,
 		ModelNumber:  detail.ModelNumber,
 		Name:         detail.Name,
-		// Label QR links recorded at intake (or hand-added "- qr <url>" lines):
-		// the qr pipeline stage follows these before any searching.
-		HintURLs: notes.QRURLs(detail.Notes),
+		// Label QR links recorded at intake (qr.link events): the qr pipeline
+		// stage follows these before any searching.
+		HintURLs: qrURLs,
 	}
 	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" && strings.TrimSpace(item.Name) == "" {
 		log.Printf("skip %q — no searchable identity", detail.Name)
@@ -557,17 +570,17 @@ func containsClass(cs []DocClassCfg, name string) bool {
 	return false
 }
 
-// rejectedSet unions ledger rejections with "rejected" lines in the entity's
-// notes block (the reject button writes there — Homebox is the shared bus
-// between the portal and scheduler processes), ingesting new notes rejections
-// as ledger labels on first sight.
+// rejectedSet unions ledger rejections with doc.reject events (the reject
+// button records the event; legacy notes lines arrive via importNotes),
+// ingesting new rejections as ledger labels on first sight.
 func (s *Scanner) rejectedSet(ctx context.Context, detail *homebox.EntityOut) map[string]bool {
 	set, err := s.store.RejectedURLs(ctx, detail.ID, s.cfg.manualClass().Name)
 	if err != nil {
 		log.Printf("ledger rejected urls %s: %v", detail.ID, err)
 		set = map[string]bool{}
 	}
-	for _, u := range notes.RejectedURLs(detail.Notes) {
+	rejectedEvents, _ := s.store.EventURLs(ctx, detail.ID, store.EvDocReject)
+	for _, u := range rejectedEvents {
 		if set[u] {
 			continue
 		}
@@ -686,12 +699,12 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 		}
 		return s.reviewGate(ctx, detail, res, base)
 	}
-	n := notes.Append(fresh.Notes, notes.Line(dc.Name+" linked "+strings.Join(links, " ")))
-	upd.Notes = &n
+	s.setBreadcrumb(&upd, fresh.Notes, fresh, dc.Name)
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		return err
 	}
 	log.Printf("%s linked for %q — %s", dc.Name, detail.Name, docURL)
+	s.event(ctx, detail, store.EvDocLink, dc.Name, docURL, strings.Join(links, " "))
 	s.recordDecision(ctx, detail, res, dc, "linked", docURL)
 	if base != nil {
 		t := time.Now()
@@ -751,13 +764,11 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 	if err != nil {
 		return err
 	}
-	// Log the attach + link the source in custom fields (Homebox auto-links a
-	// single URL per field).
+	// Link the source in custom fields (Homebox auto-links a single URL per
+	// field) + refresh the breadcrumb; the audit line is an event now.
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		line := fmt.Sprintf("%s attached (%.2f) %s", dc.Name, res.Confidence, notes.MDLink("pdf", best.URL))
-		n := notes.Append(updated.Notes, notes.Line(line))
-		upd.Notes = &n
+		s.setBreadcrumb(&upd, updated.Notes, updated, dc.Name)
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", best.URL))
 		if res.BestHTML != nil && res.BestHTML.Official {
 			upd.Fields = homebox.UpsertField(upd.Fields, dc.Field+" (web)", notes.MDLink("web", res.BestHTML.URL))
@@ -766,6 +777,7 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 			log.Printf("attach note put %s: %v", detail.ID, err)
 		}
 	}
+	s.event(ctx, detail, store.EvDocAttach, dc.Name, best.URL, fmt.Sprintf("conf=%.2f", res.Confidence))
 	s.recordDecision(ctx, detail, res, dc, "attached", best.URL)
 	if base == nil {
 		return nil // secondary class: no store record to update
@@ -815,13 +827,14 @@ func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res
 	}
 	if s.cfg.PortalURL != "" && s.cfg.SignKey != "" {
 		msg.Actions = []string{
-			"http, Attach, " + ActionURL(s.cfg.PortalURL, "approve", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
-			"http, Reject, " + ActionURL(s.cfg.PortalURL, "reject", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST",
+			"http, Attach, " + sign.ActionURL(s.cfg.PortalURL, "approve", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
+			"http, Reject, " + sign.ActionURL(s.cfg.PortalURL, "reject", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST",
 		}
 	}
 	if err := s.ntfy.Send(ctx, msg); err != nil {
 		return err
 	}
+	s.event(ctx, detail, store.EvReviewRequest, dc.Name, res.Best.URL, why)
 	s.recordDecision(ctx, detail, res, dc, "review", res.Best.URL)
 	base.DocURL = res.Best.URL
 	base.Status = store.StatusPendingReview
@@ -884,6 +897,86 @@ func (s *Scanner) recordError(ctx context.Context, sum *homebox.EntitySummary, c
 		base.Attempts = rec.Attempts + 1
 	}
 	_ = s.store.Upsert(ctx, base)
+	_ = s.store.AppendEvent(ctx, &store.Event{
+		EntityID: sum.ID, EntityName: sum.Name, Actor: store.ActorScanner,
+		Kind: store.EvError, Detail: cause.Error(),
+	})
+}
+
+// event appends an activity-log row for a scanner action (M2/D26–D27: written
+// synchronously at the decision point; aggregation is read-time SQL).
+func (s *Scanner) event(ctx context.Context, detail *homebox.EntityOut, kind, class, url, extra string) {
+	err := s.store.AppendEvent(ctx, &store.Event{
+		EntityID: detail.ID, EntityName: detail.Name, Actor: store.ActorScanner,
+		Kind: kind, Class: class, URL: url, Detail: extra,
+	})
+	if err != nil {
+		log.Printf("event %s %s: %v", kind, detail.ID, err)
+	}
+}
+
+// importNotes ingests legacy notes-bus semantic lines (qr/rejected/approved)
+// into the events table — idempotent (signal events dedupe on write). Keeps
+// hand-written lines and split-mode portal writes working until the notes bus
+// is fully retired (M3).
+func (s *Scanner) importNotes(ctx context.Context, detail *homebox.EntityOut) {
+	for kind, urls := range map[string][]string{
+		store.EvQRLink:     notes.QRURLs(detail.Notes),
+		store.EvDocReject:  notes.RejectedURLs(detail.Notes),
+		store.EvDocApprove: notes.ApprovedURLs(detail.Notes),
+	} {
+		for _, u := range urls {
+			_ = s.store.AppendEvent(ctx, &store.Event{
+				EntityID: detail.ID, EntityName: detail.Name, Actor: store.ActorUser,
+				Kind: kind, URL: u, Detail: "imported from notes",
+			})
+		}
+	}
+}
+
+// breadcrumbLine renders the one-line notes status: artifact classes present
+// on the item plus the portal log link. extras count as present — the caller
+// is writing them in the same PUT, so the passed detail predates them.
+func (s *Scanner) breadcrumbLine(detail *homebox.EntityOut, extras ...string) string {
+	have := map[string]bool{}
+	for _, e := range extras {
+		have[e] = true
+	}
+	var parts []string
+	for _, dc := range s.cfg.DocClasses {
+		if dc.Enabled && (have[dc.Name] || hasDoc(detail, dc)) {
+			parts = append(parts, dc.Name+" ✓")
+		}
+	}
+	if have["photo"] || hasOfficialPhoto(detail) {
+		parts = append(parts, "photo ✓")
+	}
+	if have["warranty"] || detail.WarrantyExpires != "" || detail.LifetimeWarranty {
+		parts = append(parts, "warranty ✓")
+	}
+	status := "searching"
+	if len(parts) > 0 {
+		status = strings.Join(parts, " · ")
+	}
+	line := "docfetch: " + status
+	if s.cfg.PortalURL != "" {
+		line += " — " + notes.MDLink("log", s.cfg.PortalURL+"/log/"+detail.ID)
+	}
+	return line
+}
+
+// setBreadcrumb replaces the notes docfetch block with the one-line status.
+// No-op when disabled or when the rendered notes value is unchanged (avoids a
+// pointless updatedAt bump). Callers must have run importNotes first — the
+// rewrite drops legacy semantic lines.
+func (s *Scanner) setBreadcrumb(upd *homebox.EntityUpdate, existing string, detail *homebox.EntityOut, extras ...string) {
+	if !s.cfg.Breadcrumb {
+		return
+	}
+	n := notes.Breadcrumb(existing, s.breadcrumbLine(detail, extras...))
+	if n != existing {
+		upd.Notes = &n
+	}
 }
 
 // downloadFallback tries the remaining PDF candidates in score order; each one

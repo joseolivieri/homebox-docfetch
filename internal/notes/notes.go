@@ -105,6 +105,26 @@ func dateLike(s string) bool {
 	return len(s) == 10 && s[4] == '-' && s[7] == '-'
 }
 
+// Breadcrumb replaces the docfetch block's content with a single status line,
+// preserving user text outside the markers byte-for-byte (M2/D26: the full
+// audit trail lives in the events table; notes carry only this one-line
+// pointer). Returns the input unchanged when the block already reads exactly
+// this — callers use that to skip a no-op PUT (own writes bump updatedAt).
+func Breadcrumb(existing, line string) string {
+	line = "- " + strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+	block := Begin + "\n" + header + "\n" + line + "\n" + End
+	bi := strings.Index(existing, Begin)
+	ei := strings.Index(existing, End)
+	if bi >= 0 && ei > bi {
+		return existing[:bi] + block + existing[ei+len(End):]
+	}
+	out := strings.TrimRight(existing, "\n")
+	if out != "" {
+		out += "\n\n"
+	}
+	return out + block
+}
+
 // MaxNotes is the byte budget for the whole notes value. Homebox validates
 // notes length server-side (observed live: a long audit block turned every
 // PUT into a 500, losing the fields written alongside it); we prune our own
