@@ -222,10 +222,6 @@ func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, follo
 		return err
 	}
 
-	// Legacy notes-bus lines (hand-written, or a split-mode portal) become
-	// events before anything reads or rewrites the notes block.
-	s.importNotes(ctx, detail)
-
 	base := &store.Record{
 		EntityID:    sum.ID,
 		Name:        detail.Name,
@@ -915,25 +911,6 @@ func (s *Scanner) event(ctx context.Context, detail *homebox.EntityOut, kind, cl
 	}
 }
 
-// importNotes ingests legacy notes-bus semantic lines (qr/rejected/approved)
-// into the events table — idempotent (signal events dedupe on write). Keeps
-// hand-written lines and split-mode portal writes working until the notes bus
-// is fully retired (M3).
-func (s *Scanner) importNotes(ctx context.Context, detail *homebox.EntityOut) {
-	for kind, urls := range map[string][]string{
-		store.EvQRLink:     notes.QRURLs(detail.Notes),
-		store.EvDocReject:  notes.RejectedURLs(detail.Notes),
-		store.EvDocApprove: notes.ApprovedURLs(detail.Notes),
-	} {
-		for _, u := range urls {
-			_ = s.store.AppendEvent(ctx, &store.Event{
-				EntityID: detail.ID, EntityName: detail.Name, Actor: store.ActorUser,
-				Kind: kind, URL: u, Detail: "imported from notes",
-			})
-		}
-	}
-}
-
 // breadcrumbLine renders the one-line notes status: artifact classes present
 // on the item plus the portal log link. extras count as present — the caller
 // is writing them in the same PUT, so the passed detail predates them.
@@ -967,8 +944,7 @@ func (s *Scanner) breadcrumbLine(detail *homebox.EntityOut, extras ...string) st
 
 // setBreadcrumb replaces the notes docfetch block with the one-line status.
 // No-op when disabled or when the rendered notes value is unchanged (avoids a
-// pointless updatedAt bump). Callers must have run importNotes first — the
-// rewrite drops legacy semantic lines.
+// pointless updatedAt bump).
 func (s *Scanner) setBreadcrumb(upd *homebox.EntityUpdate, existing string, detail *homebox.EntityOut, extras ...string) {
 	if !s.cfg.Breadcrumb {
 		return

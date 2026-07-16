@@ -119,30 +119,19 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		upd.Fields = homebox.UpsertField(upd.Fields, "Support (QR)", notes.MDLink("qr", qrURLs[0]))
 	}
 
-	// Intake provenance is events now (M2/D26); notes carry one breadcrumb
-	// line. Split mode (legacyNotes) still writes the old semantic lines so a
-	// scanner in another container can import them from Homebox.
+	// Intake provenance is events now (M2/D26); notes carry one breadcrumb line.
 	var got []string
 	for _, f := range []string{"sticker", "receipt", "product", "warranty"} {
 		if r.MultipartForm != nil && len(r.MultipartForm.File[f]) > 0 {
 			got = append(got, f)
 		}
 	}
-	if s.legacyNotes {
-		noteLines := []string{notes.Line("created via photo intake")}
-		for _, u := range qrURLs {
-			noteLines = append(noteLines, notes.Line("qr "+notes.MDLink("link", u)))
-		}
-		note := notes.Append("", noteLines...)
-		upd.Notes = &note
-	} else {
-		line := "docfetch: intake ✓"
-		if pub := strings.TrimRight(s.cfg.Intake.PublicURL, "/"); pub != "" {
-			line += " — " + notes.MDLink("log", pub+"/log/"+ent.ID)
-		}
-		note := notes.Breadcrumb("", line)
-		upd.Notes = &note
+	line := "docfetch: intake ✓"
+	if pub := strings.TrimRight(s.cfg.Intake.PublicURL, "/"); pub != "" {
+		line += " — " + notes.MDLink("log", pub+"/log/"+ent.ID)
 	}
+	note := notes.Breadcrumb("", line)
+	upd.Notes = &note
 	if _, err := s.hb.PutEntity(ctx, ent.ID, upd); err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("metadata put: %w", err))
 		return

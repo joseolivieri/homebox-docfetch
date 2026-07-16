@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homebox-docfetch/internal/sign"
 	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
@@ -16,9 +14,7 @@ import (
 // The ntfy review-gate buttons land here. Both handlers follow the intake
 // stage's boundary rule (vision-only remote calls): neither downloads
 // anything. They record a doc.approve / doc.reject signal event in the shared
-// store (M2/D26) and nudge the scanner to act now. In deprecated split mode
-// (legacyNotes) they additionally write the old notes-bus line, which the
-// scanner in the other container imports.
+// store (M2/D26) and nudge the scanner to act now.
 
 // verifyAction checks the HMAC-signed (action, entity, url) triple common to
 // the one-tap ntfy endpoints. Returns ("", "") after writing the error.
@@ -43,16 +39,16 @@ func (s *Server) verifyAction(w http.ResponseWriter, r *http.Request, action str
 // verification — a human approved it) and records the confirmation label in
 // the learning ledger.
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	s.queueAction(w, r, "approve", store.EvDocApprove, "approved", "pdf", "manual approved — attaching shortly")
+	s.queueAction(w, r, "approve", store.EvDocApprove, "approved", "manual approved — attaching shortly")
 }
 
 // handleReject records a permanent negative label (doc.reject event). The
 // scanner never proposes the URL again and re-searches.
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
-	s.queueAction(w, r, "reject", store.EvDocReject, "rejected", "link", "candidate rejected")
+	s.queueAction(w, r, "reject", store.EvDocReject, "rejected", "candidate rejected")
 }
 
-func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, kind, keyword, label, okMsg string) {
+func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, kind, keyword, okMsg string) {
 	id, docURL := s.verifyAction(w, r, action)
 	if id == "" {
 		return
@@ -86,16 +82,6 @@ func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, kin
 	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
-	}
-	if s.legacyNotes {
-		// Split mode: the scanner cannot see this store — ride the notes bus.
-		upd := homebox.FullUpdateFrom(detail)
-		n := notes.Append(detail.Notes, notes.Line(keyword+" "+notes.MDLink(label, docURL)))
-		upd.Notes = &n
-		if _, err := s.hb.PutEntity(ctx, id, upd); err != nil {
-			writeErr(w, http.StatusBadGateway, err)
-			return
-		}
 	}
 	if s.trigger != nil {
 		s.trigger(id)

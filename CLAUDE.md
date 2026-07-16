@@ -15,8 +15,8 @@ The **shared sqlite event store** is the bus between them (M2/D26, `internal/sto
 qr/approve/reject are deduped signal events; the portal `trigger`s immediate scanner
 processing (DB writes don't bump `updatedAt`, so the change-poll can't see them). Entity
 notes carry only a one-line breadcrumb (`internal/notes` `Breadcrumb`). Activity log:
-portal `/log` pages or `docfetch log`. Legacy notes-bus lines are still imported
-(split-mode transition; dies at M3) — see `docs/plan-architecture-v2.md`.
+portal `/log` pages or `docfetch log`. No legacy notes-bus compatibility — pre-M2
+collections are reset, not migrated. See `docs/plan-architecture-v2.md`.
 
 ## Read order (before touching code)
 

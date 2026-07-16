@@ -175,7 +175,7 @@ func runServe(ctx context.Context, cfgPath string) error {
 
 	errc := make(chan error, 2)
 	go func() { errc <- scheduler.Run(ctx, d.sc, specsFrom(cfg)) }()
-	go func() { errc <- portal.New(cfg, d.hb, d.ai, d.st, trigger, false).Run(ctx) }()
+	go func() { errc <- portal.New(cfg, d.hb, d.ai, d.st, trigger).Run(ctx) }()
 	err = <-errc
 	cancel()
 	if err2 := <-errc; err == nil {
@@ -224,9 +224,9 @@ func runPortal(ctx context.Context, cfgPath string) error {
 		return fmt.Errorf("portal requires an LLM key (vision extraction)")
 	}
 	// Intake stage: homebox + vision only — no discovery engine, no scanner.
-	// Split mode: no trigger, and legacyNotes=true rides the notes bus so the
-	// scanner in the other container still sees qr/approve/reject signals.
-	return portal.New(cfg, d.hb, d.ai, d.st, nil, true).Run(ctx)
+	// NOTE: split mode shares nothing with a scanner in another container —
+	// qr/approve/reject signals land in this process's store only. Use `serve`.
+	return portal.New(cfg, d.hb, d.ai, d.st, nil).Run(ctx)
 }
 
 // runLog prints recent activity events (the CLI face of the portal /log page).

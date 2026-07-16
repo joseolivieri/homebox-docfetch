@@ -46,20 +46,14 @@ type Server struct {
 	// The portal only signals; all egress still happens in the scanner.
 	trigger func(entityID string)
 
-	// legacyNotes keeps writing qr/approved/rejected notes lines alongside
-	// events. Set in the deprecated split-mode `portal` subcommand, where the
-	// scanner runs in another container and cannot see this store; the scanner
-	// imports the lines into events. Dies with split mode (M3).
-	legacyNotes bool
-
 	unverifiedTagID string
 	provenanceTagID string
 }
 
 // New builds the portal server. st is the shared event store; trigger (may be
 // nil) requests immediate scanner processing of an entity.
-func New(cfg *config.Config, hb *homebox.Client, ai *llm.Client, st *store.Store, trigger func(entityID string), legacyNotes bool) *Server {
-	return &Server{cfg: cfg, hb: hb, ai: ai, st: st, trigger: trigger, legacyNotes: legacyNotes}
+func New(cfg *config.Config, hb *homebox.Client, ai *llm.Client, st *store.Store, trigger func(entityID string)) *Server {
+	return &Server{cfg: cfg, hb: hb, ai: ai, st: st, trigger: trigger}
 }
 
 // Run bootstraps tags and serves until ctx is done.
