@@ -1,5 +1,6 @@
 # local runtime config (may contain resolved secrets / local paths)
 config.yaml
+.env
 # state
 *.db
 data/

@@ -24,6 +24,22 @@ reference deployment exists as the `docfetch` Ansible role in the author's priva
 **New here? Start with [`docs/how-it-works.md`](docs/how-it-works.md)** — a plain-language
 walkthrough of the whole pipeline (intake, enrichment, manual discovery, review gate, learning loop).
 
+## Dev quickstart
+
+```bash
+make env       # creates .env — uncomment + fill DOCFETCH_HOMEBOX_URL, HOMEBOX_TOKEN, OPENROUTER_API_KEY
+make dev       # searxng in docker (loopback :8080) + native `go run serve` on config.dev.yaml
+```
+
+Portal + activity log: http://localhost:8099 (log at `/log`). Other targets:
+`make once` (single scan pass), `make log` (events in the terminal), `make probe`
+(Homebox client smoke test), `make dev-docker` (full stack containerized),
+`make reset` (wipe dev state — collections are disposable in dev, D26),
+`make check` (build + tests). Dev state lives in `./data/` (gitignored).
+
+Point it at a Homebox instance whose collection you can afford to reset — the
+pipeline tags, enriches, and attaches to whatever it sees.
+
 ## Agent read order
 
 Read these before touching code. They are the source of truth; do not re-derive facts from
