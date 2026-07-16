@@ -3,17 +3,20 @@
 Standalone sidecar that enriches a [Homebox](https://homebox.software) inventory
 through its REST API — **no UI integration, no DB access**. Two discrete stages (D20):
 
-- **Intake** (`docfetch portal`, `internal/portal`) — phone photo-intake PWA. Vision-model
+- **Intake** (`internal/portal`) — phone photo-intake PWA. Vision-model
   calls only; no web searching (offline-LLM-ready).
-- **Curation** (`docfetch scheduler`, `internal/scheduler`) — recurring scanner owning ALL
+- **Curation** (`internal/scheduler`) — recurring scanner owning ALL
   web egress: metadata enrichment, manual fetching, official photos, warranty, tagging.
 
-The stages share nothing but Homebox itself; the entity notes block is the bus between them.
+Both stages run in one process (`docfetch serve`, D25); the egress boundary is enforced at
+the package level (`internal/portal` imports no discovery/egress code). The entity notes
+block is currently the bus between them (moving to a shared event store — see
+[`docs/plan-architecture-v2.md`](docs/plan-architecture-v2.md)).
 
 This repo holds the service source, its container/compose, and its design docs. It is
 deployment-agnostic: run it anywhere `docker compose` works, configured via `config.yaml`
-(see `config.example.yaml`) plus secrets from env. CI publishes a linux/amd64 image to
-`ghcr.io/joseolivieri/homebox-docfetch` (`latest` on main, semver on `v*` tags). One
+(see `config.example.yaml`) plus secrets from env. CI publishes a linux/amd64 + linux/arm64
+image to `ghcr.io/joseolivieri/homebox-docfetch` (`latest` on main, semver on `v*` tags). One
 reference deployment exists as the `docfetch` Ansible role in the author's private homelab repo.
 
 **New here? Start with [`docs/how-it-works.md`](docs/how-it-works.md)** — a plain-language
@@ -33,7 +36,7 @@ classic-Homebox knowledge — this deployment runs the **entity-model** fork (se
 
 ```
 homebox-docfetch/
-  cmd/docfetch/         # single binary; subcommands: scheduler | portal | once
+  cmd/docfetch/         # single binary; subcommands: serve | once | probe (scheduler/portal deprecated)
   internal/
     config/             # property-file (YAML) loader + validation
     homebox/            # REST client (entity model): list/create/patch/attach, tags, entity-types
@@ -51,8 +54,8 @@ homebox-docfetch/
 ## Conventions
 
 - **Language: Go.** Single static binary, one image, in-process cron (container stays up, ~0 idle cost).
-- **Core is packages, not a monolith.** Both entrypoints (`scheduler`, `portal`) share `internal/*`.
-  Phase 2 adds `internal/portal` + a vision code path in `internal/llm` and nothing else structural.
+- **Core is packages, not a monolith.** Both stages share `internal/*` and one entrypoint
+  (`serve`); the intake/curation boundary lives in the package graph, not in processes.
 - **Config is a property file.** Everything schedule/threshold/tag-related is config, never hardcoded.
   Secrets (tokens/keys) come from env only — never from the config file, never committed.
 - **Deployment lives elsewhere.** This repo ships source + Dockerfile + compose; site-specific

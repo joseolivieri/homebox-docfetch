@@ -2,11 +2,12 @@
 //
 // Subcommands:
 //
-//	scheduler   run the cron loop (scan / followup / reconcile)   [P1-07]
+//	serve       run scheduler + portal in one process (blessed)   [v2 M1]
 //	once        run a single scan pass and exit                    [P1-07]
-//	portal      run the photo-intake HTTP server                   [Phase 2]
 //	probe       smoke-test the Homebox client against the live API [dev]
 //	version     print version
+//	scheduler   deprecated: cron loop only (use serve)
+//	portal      deprecated: intake HTTP server only (use serve)
 package main
 
 import (
@@ -44,6 +45,8 @@ func main() {
 		mustRun(probe(ctx, *cfgPath))
 	case "once":
 		mustRun(runOnce(ctx, *cfgPath))
+	case "serve":
+		mustRun(runServe(ctx, *cfgPath))
 	case "scheduler":
 		mustRun(runScheduler(ctx, *cfgPath))
 	case "portal":
@@ -63,11 +66,12 @@ func usage() {
 usage: docfetch <command> [--config path]
 
 commands:
-  scheduler   run the cron loop (scan / followup / reconcile)   [P1-07]
-  once        run a single scan pass and exit                    [P1-07]
-  portal      run the photo-intake HTTP server                   [Phase 2]
+  serve       run scheduler + portal in one process (recommended)
+  once        run a single scan pass and exit
   probe       smoke-test the Homebox client against the live API
   version     print version
+  scheduler   deprecated: cron loop only (use serve)
+  portal      deprecated: intake HTTP server only (use serve)
 `)
 }
 

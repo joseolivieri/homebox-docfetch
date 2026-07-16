@@ -1,16 +1,19 @@
 # homebox-docfetch — Claude Instructions
 
-Go sidecar that enriches a Homebox inventory (the **entity-model fork**, NOT classic
-Homebox) purely via its REST API. Two strictly separated stages:
+Go sidecar that enriches a Homebox inventory (the **entity model** — upstream since the
+June 2026 release; NOT the pre-entity API) purely via its REST API. Two strictly
+separated stages, one process (`docfetch serve`, D25):
 
-- **Intake** (`docfetch portal`, `internal/portal`) — phone photo-intake PWA. Vision-model
-  calls only; NO web egress (offline-LLM-ready).
-- **Curation** (`docfetch scheduler`, `internal/scheduler`) — recurring scanner owning ALL
+- **Intake** (`internal/portal`) — phone photo-intake PWA. Vision-model
+  calls only; NO web egress (offline-LLM-ready). The boundary is package-level:
+  `internal/portal` must never import discovery/egress code.
+- **Curation** (`internal/scheduler`) — recurring scanner owning ALL
   web egress: metadata enrichment (fill-only, corroborated), per-class document fetching
   (manual/parts/quickstart/datasheet), official photos, warranty, tagging.
 
-Stages share nothing but Homebox itself; the entity **notes block** is the bus between them
-(`- qr/rejected/approved [label](url)` semantic lines, `internal/notes`).
+The entity **notes block** is currently the bus between them
+(`- qr/rejected/approved [label](url)` semantic lines, `internal/notes`); it is being
+replaced by a shared sqlite event store — see `docs/plan-architecture-v2.md` (M2/D26).
 
 ## Read order (before touching code)
 

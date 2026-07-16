@@ -139,7 +139,10 @@ func runOnce(ctx context.Context, cfgPath string) error {
 	return nil
 }
 
-func runScheduler(ctx context.Context, cfgPath string) error {
+// runServe runs the curation scheduler and the intake portal in one process
+// on the shared store (plan-architecture-v2 M1 / D25). This is the blessed
+// deployment shape; the standalone scheduler/portal subcommands are deprecated.
+func runServe(ctx context.Context, cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -149,15 +152,51 @@ func runScheduler(ctx context.Context, cfgPath string) error {
 		return err
 	}
 	defer d.st.Close()
-	return scheduler.Run(ctx, d.sc, scheduler.Specs{
+	if d.ai == nil {
+		return fmt.Errorf("serve requires an LLM key (portal vision extraction)")
+	}
+
+	// Either half exiting (error or clean ctx shutdown) stops the other.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errc := make(chan error, 2)
+	go func() { errc <- scheduler.Run(ctx, d.sc, specsFrom(cfg)) }()
+	go func() { errc <- portal.New(cfg, d.hb, d.ai).Run(ctx) }()
+	err = <-errc
+	cancel()
+	if err2 := <-errc; err == nil {
+		err = err2
+	}
+	return err
+}
+
+func specsFrom(cfg *config.Config) scheduler.Specs {
+	return scheduler.Specs{
 		ScanNew:    cfg.Curation.Schedule.ScanNew,
 		Followup:   cfg.Curation.Schedule.Followup,
 		Reconcile:  cfg.Curation.Reconcile.DigestSchedule,
 		ChangePoll: cfg.Curation.Schedule.ChangePoll,
-	})
+	}
 }
 
+// Deprecated: split-mode subcommand kept for transition; use `serve`.
+func runScheduler(ctx context.Context, cfgPath string) error {
+	log.Println("warning: `scheduler` is deprecated; use `serve` (runs scheduler + portal in one process)")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	d, err := build(cfg)
+	if err != nil {
+		return err
+	}
+	defer d.st.Close()
+	return scheduler.Run(ctx, d.sc, specsFrom(cfg))
+}
+
+// Deprecated: split-mode subcommand kept for transition; use `serve`.
 func runPortal(ctx context.Context, cfgPath string) error {
+	log.Println("warning: `portal` is deprecated; use `serve` (runs scheduler + portal in one process)")
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
