@@ -12,10 +12,22 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #111318; color: #e6e6e9; }
-  .wrap { max-width: 480px; margin: 0 auto; padding: 16px; }
-  h1 { font-size: 1.15rem; margin: 8px 0 16px; }
-  .card { background: #1b1e26; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+
+  /* App shell: one screen at a time. Screen = scrollable body + action bar
+     pinned to the bottom (portrait) or a right-hand rail (phone landscape). */
+  .screen { display: none; }
+  .screen.active { display: flex; flex-direction: column; height: 100dvh; }
+  .sbody { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: 12px 16px 16px; width: 100%; max-width: 520px; margin: 0 auto; }
+  .actions { flex: none; width: 100%; max-width: 520px; margin: 0 auto;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: #111318; border-top: 1px solid #1f232e;
+    display: flex; flex-direction: column; gap: 10px; }
+
+  h1 { font-size: 1.05rem; margin: 6px 0 12px; }
+  .card { background: #1b1e26; border-radius: 12px; padding: 16px; }
   label { display: block; font-size: .8rem; color: #9aa0ab; margin: 10px 0 4px; }
   input, select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2c3140; background: #12141a; color: #e6e6e9; font-size: 1rem; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -28,18 +40,28 @@
     padding:2px 8px; border-radius:8px; font-size:.7rem; color:#fff; display:none; }
   .capbtn.filled { border-style: solid; border-color:#3d7eff; }
   .capbtn.filled .tag { display:block; }
-  button.primary { width:100%; padding:14px; margin-top:14px; border:0; border-radius:10px;
-    background:#3d7eff; color:#fff; font-size:1rem; font-weight:600; cursor:pointer; }
-  button.primary:disabled { opacity:.45; }
+
+  .btn { display:block; width:100%; padding:13px; border:0; border-radius:10px;
+    font-size:1rem; font-weight:600; cursor:pointer; text-align:center; text-decoration:none; }
+  .btn.primary { background:#3d7eff; color:#fff; }
+  .btn.secondary { background:#232838; color:#c9d4ff; border:1px solid #2c3140; }
+  .btn:disabled { opacity:.45; }
+
   .hint { font-size:.75rem; color:#6d7380; margin-top:8px; }
   .toggle { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.8rem; color:#9aa0ab; }
   .toggle input { width:auto; accent-color:#3d7eff; }
-  .err { color:#ff6b6b; font-size:.85rem; margin-top:10px; white-space:pre-wrap; }
-  .ok { color:#51cf66; }
-  /* Near-live activity log on the post-create screen: fixed font, colored
-     columns, one line per event — horizontal scroll instead of wrapping. */
-  .logbox { margin-top:12px; border:1px solid #2c3140; border-radius:8px; background:#12141a;
-    overflow-x:auto; max-height:40vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+  .err { color:#ff6b6b; font-size:.85rem; white-space:pre-wrap; }
+  .err:empty { display:none; }
+  .ok { color:#51cf66; margin: 0 0 6px; }
+  .sub { color:#9aa0ab; font-size:.85rem; margin: 0 0 10px; }
+
+  /* Near-live activity log: fixed font, colored columns, one line per event —
+     horizontal scroll instead of wrapping; fills all remaining space (the
+     done screen's body is a flex column so #logBox can stretch). */
+  #done .sbody { display:flex; flex-direction:column; overflow:hidden; }
+  #logBox { display:flex; flex-direction:column; flex:1; min-height:0; }
+  .logbox { flex:1; min-height:0; border:1px solid #2c3140; border-radius:8px; background:#12141a;
+    overflow:auto; -webkit-overflow-scrolling:touch; }
   .logtbl { border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
     font-size:.72rem; line-height:1.5; white-space:nowrap; }
   .logtbl td { padding:2px 10px 2px 0; }
@@ -50,97 +72,130 @@
   .ld { color:#e6e6e9; }            /* detail */
   .logtbl a { color:#7aa2f7; text-decoration:none; }
   .logempty { color:#6d7380; font-family:ui-monospace,Menlo,monospace; font-size:.72rem; padding:8px 10px; }
-  #confirm, #done { display:none; }
+
   .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
   .spinner { display:inline-block; width:16px; height:16px; border:2px solid #fff3; border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-3px; margin-right:8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   a { color:#3d7eff; }
+
+  /* Phone landscape: content left, action rail right; photo grid 4-across;
+     the done screen's log gets the whole left pane. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    .screen.active { flex-direction: row; }
+    .sbody { max-width: none; padding: 10px 16px; }
+    .actions { width: 230px; max-width: none; margin: 0; border-top: 0; border-left: 1px solid #1f232e;
+      justify-content: flex-end; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
+    .grid2 { grid-template-columns: repeat(4, 1fr); }
+    h1 { margin: 2px 0 8px; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>📦 Homebox Intake</h1>
 
-  <div id="capture" class="card">
-    <div class="grid2">
-      <div>
-        <div class="capbtn" id="btn_sticker" onclick="pick('sticker')">
-          <span class="em">🏷️</span><span>Model sticker</span><span class="tag">sticker</span>
+  <div id="capture" class="screen active">
+    <div class="sbody">
+      <h1>📦 Homebox Intake</h1>
+      <div class="card">
+        <div class="grid2">
+          <div>
+            <div class="capbtn" id="btn_sticker" onclick="pick('sticker')">
+              <span class="em">🏷️</span><span>Model sticker</span><span class="tag">sticker</span>
+            </div>
+            <input type="file" id="f_sticker" accept="image/*" hidden>
+          </div>
+          <div>
+            <div class="capbtn" id="btn_receipt" onclick="pick('receipt')">
+              <span class="em">🧾</span><span>Receipt</span><span class="tag">receipt</span>
+            </div>
+            <input type="file" id="f_receipt" accept="image/*" hidden>
+          </div>
+          <div>
+            <div class="capbtn" id="btn_product" onclick="pick('product')">
+              <span class="em">📷</span><span>Product photo</span><span class="tag">product</span>
+            </div>
+            <input type="file" id="f_product" accept="image/*" hidden>
+          </div>
+          <div>
+            <div class="capbtn" id="btn_warranty" onclick="pick('warranty')">
+              <span class="em">🛡️</span><span>Warranty info</span><span class="tag">warranty</span>
+            </div>
+            <input type="file" id="f_warranty" accept="image/*" hidden>
+          </div>
         </div>
-        <input type="file" id="f_sticker" accept="image/*" hidden>
-      </div>
-      <div>
-        <div class="capbtn" id="btn_receipt" onclick="pick('receipt')">
-          <span class="em">🧾</span><span>Receipt</span><span class="tag">receipt</span>
-        </div>
-        <input type="file" id="f_receipt" accept="image/*" hidden>
-      </div>
-      <div>
-        <div class="capbtn" id="btn_product" onclick="pick('product')">
-          <span class="em">📷</span><span>Product photo</span><span class="tag">product</span>
-        </div>
-        <input type="file" id="f_product" accept="image/*" hidden>
-      </div>
-      <div>
-        <div class="capbtn" id="btn_warranty" onclick="pick('warranty')">
-          <span class="em">🛡️</span><span>Warranty info</span><span class="tag">warranty</span>
-        </div>
-        <input type="file" id="f_warranty" accept="image/*" hidden>
+        <div class="hint">All optional, any combination. Sticker → identity, receipt → purchase info,
+          product → your photo of the item, warranty → box panel or webpage with terms.</div>
+        <label class="toggle"><input type="checkbox" id="libMode">
+          <span>Pick from library instead of camera</span></label>
       </div>
     </div>
-    <div class="hint">All optional, any combination. Sticker → identity, receipt → purchase info,
-      product → your photo of the item, warranty → box panel or webpage with terms.</div>
-    <label class="toggle"><input type="checkbox" id="libMode">
-      <span>Pick from library instead of camera</span></label>
-    <button class="primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
-    <div class="err" id="capErr"></div>
+    <div class="actions">
+      <div class="err" id="capErr"></div>
+      <button class="btn primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
+    </div>
   </div>
 
-  <div id="confirm" class="card">
-    <label>Name *</label><input id="c_name">
-    <div class="row2">
-      <div><label>Quantity</label><input id="c_quantity" type="number" inputmode="numeric" pattern="[0-9]*" min="1" step="1" value="1"></div>
-      <div><label>Model number</label><input id="c_modelNumber"></div>
+  <div id="confirm" class="screen">
+    <div class="sbody">
+      <h1>Confirm details</h1>
+      <div class="card">
+        <label>Name *</label><input id="c_name">
+        <div class="row2">
+          <div><label>Quantity</label><input id="c_quantity" type="number" inputmode="numeric" pattern="[0-9]*" min="1" step="1" value="1"></div>
+          <div><label>Model number</label><input id="c_modelNumber"></div>
+        </div>
+        <label>Manufacturer</label><input id="c_manufacturer">
+        <label>Serial number</label><input id="c_serialNumber">
+        <div class="row2">
+          <div><label>Purchase date</label><input id="c_purchaseDate" type="date"></div>
+          <div><label>Price</label><input id="c_purchasePrice" type="number" step="0.01" inputmode="decimal"></div>
+        </div>
+        <label>Purchased from</label><input id="c_purchaseFrom">
+        <div class="row2">
+          <div><label>Warranty (months)</label><input id="c_warrantyMonths" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1"></div>
+          <div><label>Claims URL</label><input id="c_warrantyClaimsUrl" type="url" placeholder="https://…"></div>
+        </div>
+        <label>Warranty notes</label><input id="c_warrantyDetails">
+        <div id="qrBox" style="display:none">
+          <label>QR links found on labels</label>
+          <div id="qrList"></div>
+        </div>
+        <label>Location (optional)</label>
+        <select id="c_location"><option value="">— unset —</option></select>
+      </div>
     </div>
-    <label>Manufacturer</label><input id="c_manufacturer">
-    <label>Serial number</label><input id="c_serialNumber">
-    <div class="row2">
-      <div><label>Purchase date</label><input id="c_purchaseDate" type="date"></div>
-      <div><label>Price</label><input id="c_purchasePrice" type="number" step="0.01" inputmode="decimal"></div>
+    <div class="actions">
+      <div class="err" id="confErr"></div>
+      <button class="btn primary" id="createBtn" onclick="createItem()">Add to Homebox</button>
+      <button class="btn secondary" onclick="show('capture')">← Photos</button>
     </div>
-    <label>Purchased from</label><input id="c_purchaseFrom">
-    <div class="row2">
-      <div><label>Warranty (months)</label><input id="c_warrantyMonths" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1"></div>
-      <div><label>Claims URL</label><input id="c_warrantyClaimsUrl" type="url" placeholder="https://…"></div>
-    </div>
-    <label>Warranty notes</label><input id="c_warrantyDetails">
-    <div id="qrBox" style="display:none">
-      <label>QR links found on labels</label>
-      <div id="qrList"></div>
-    </div>
-    <label>Location (optional)</label>
-    <select id="c_location"><option value="">— unset —</option></select>
-    <button class="primary" id="createBtn" onclick="createItem()">Add to Homebox</button>
-    <div class="err" id="confErr"></div>
   </div>
 
-  <div id="done" class="card">
-    <p class="ok">✓ Item created.</p>
-    <p>Manual, official product photo, warranty lookup and metadata enrichment are running in the background.</p>
-    <p><a id="itemLink" href="#" target="_blank">Open in Homebox</a></p>
-    <div id="logBox" style="display:none">
-      <label>Activity <a id="fullLog" href="#" target="_blank" style="float:right;color:#7aa2f7">full log →</a></label>
-      <div class="logbox"><table class="logtbl"><tbody id="logRows"></tbody></table>
-        <div class="logempty" id="logEmpty">waiting for the scanner…</div></div>
+  <div id="done" class="screen">
+    <div class="sbody">
+      <p class="ok">✓ Item created.</p>
+      <p class="sub">Manual, official photo, warranty and metadata enrichment are running in the background.</p>
+      <div id="logBox" style="display:none">
+        <label style="margin-top:0">Activity <a id="fullLog" href="#" target="_blank" style="float:right;color:#7aa2f7">full log →</a></label>
+        <div class="logbox"><table class="logtbl"><tbody id="logRows"></tbody></table>
+          <div class="logempty" id="logEmpty">waiting for the scanner…</div></div>
+      </div>
     </div>
-    <button class="primary" onclick="location.reload()">Add another</button>
+    <div class="actions">
+      <a id="itemLink" class="btn secondary" href="#" target="_blank">Open in Homebox</a>
+      <button class="btn primary" onclick="location.reload()">Add another</button>
+    </div>
   </div>
-</div>
 
 <script>
 const $ = id => document.getElementById(id);
 const SLOTS = ['sticker', 'receipt', 'product', 'warranty'];
 let files = {};
+
+// Screen switcher: exactly one .screen active; each owns its scroll + actions.
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id));
+  $(id).querySelector('.sbody').scrollTop = 0;
+}
 
 // Default: `capture="environment"` jumps straight into the camera — the
 // in-the-moment flow. The library toggle removes the attribute, giving the
@@ -203,8 +258,7 @@ async function extract() {
     $('c_warrantyClaimsUrl').value = j.warranty.claimsUrl || '';
     $('c_warrantyDetails').value = j.warranty.details || '';
     renderQRs(j.qrUrls || []);
-    $('confirm').style.display = 'block';
-    $('confirm').scrollIntoView({behavior: 'smooth'});
+    show('confirm');
   } catch (e) {
     $('capErr').textContent = 'Extraction failed: ' + e.message;
   } finally {
@@ -251,9 +305,7 @@ async function createItem() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.status);
     $('itemLink').href = j.url;
-    $('capture').style.display = 'none';
-    $('confirm').style.display = 'none';
-    $('done').style.display = 'block';
+    show('done');
     if (j.liveLog) startLog(j.id);
   } catch (e) {
     $('confErr').textContent = 'Create failed: ' + e.message;
@@ -266,7 +318,7 @@ async function createItem() {
 // 3s while the done screen is up (stops after 5 min — the pipeline is long
 // done by then; "full log →" has the rest).
 function startLog(id) {
-  $('logBox').style.display = 'block';
+  $('logBox').style.display = 'flex';
   $('fullLog').href = '/log/' + id;
   const until = Date.now() + 5 * 60 * 1000;
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -280,7 +332,7 @@ function startLog(id) {
         $('logRows').innerHTML = evs.map(e => `<tr><td class="lt">${esc(e.ts)}</td><td class="lk">${esc(e.kind)}</td><td class="lc">${esc(e.class)}</td><td class="ld">${esc(e.detail)}${e.url ? ` <a href="${esc(e.url)}" target="_blank">${esc(short(e.url))}</a>` : ''}</td></tr>`).join('');
       }
     } catch {} // transient — keep polling
-    if (Date.now() < until && $('done').style.display !== 'none') setTimeout(tick, 3000);
+    if (Date.now() < until && $('done').classList.contains('active')) setTimeout(tick, 3000);
   };
   tick();
 }
