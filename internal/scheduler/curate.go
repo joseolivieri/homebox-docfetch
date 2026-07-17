@@ -100,6 +100,7 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 		// label; never propose that image again; fall through to re-fetch.
 		if n, _ := s.store.LabelDecisions(ctx, detail.ID, last.ChosenURL, store.LabelRejected, "override"); n > 0 {
 			log.Printf("photo %s: user removed %s — labeled rejected, re-fetching", detail.ID, last.ChosenURL)
+			s.userEvent(ctx, detail, store.EvDocReject, "photo", last.ChosenURL, "removed via Homebox (sweep) — rejected, re-fetching")
 		}
 	} else if s.recentClassDecision(ctx, detail.ID, "photo") {
 		return
@@ -370,6 +371,9 @@ func (s *Scanner) recordClass(ctx context.Context, detail *homebox.EntityOut, cl
 	})
 	if err != nil {
 		log.Printf("ledger record %s/%s: %v", detail.ID, class, err)
+	}
+	if outcome == "notfound" {
+		s.event(ctx, detail, store.EvNotFound, class, "", "no acceptable candidate")
 	}
 }
 

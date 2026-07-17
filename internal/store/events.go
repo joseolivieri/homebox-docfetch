@@ -33,18 +33,20 @@ const (
 // are machine-readable state the scanner acts on — they are deduped on write
 // and exempt from retention pruning. Everything else is audit history.
 const (
-	EvIntakeCreated = "intake.created"
-	EvQRLink        = "qr.link"
-	EvDocApprove    = "doc.approve"
-	EvDocReject     = "doc.reject"
-	EvDocAttach     = "doc.attach"
-	EvDocLink       = "doc.link"
-	EvReviewRequest = "review.request"
-	EvPhotoAttach   = "photo.attach"
-	EvWarrantySet   = "warranty.set"
-	EvEnrichWrite   = "enrich.write"
-	EvSweepRemoved  = "sweep.removed"
-	EvError         = "error"
+	EvIntakeCreated  = "intake.created"
+	EvQRLink         = "qr.link"
+	EvDocApprove     = "doc.approve"
+	EvDocReject      = "doc.reject" // ntfy Reject button OR artifact removed via Homebox (sweep)
+	EvDocAttach      = "doc.attach"
+	EvDocLink        = "doc.link"
+	EvReviewRequest  = "review.request"
+	EvPhotoAttach    = "photo.attach"
+	EvWarrantySet    = "warranty.set"
+	EvEnrichWrite    = "enrich.write"
+	EvEnrichOverride = "enrich.override" // user corrected a machine-written value; never refilled
+	EvNotFound       = "notfound"        // a class search ended empty this pass (Class says which)
+	EvSkimVeto       = "skim.veto"       // content skim rejected a downloaded candidate
+	EvError          = "error"
 )
 
 // signalKinds are exempt from pruning and deduped per (entity, kind, url).

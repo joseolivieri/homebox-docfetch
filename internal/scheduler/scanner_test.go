@@ -451,3 +451,29 @@ func TestLinkManualNeverLinksUnverifiedPDF(t *testing.T) {
 		t.Fatalf("want web link only, got status=%s doc=%s", rec.Status, rec.DocURL)
 	}
 }
+
+func TestSweepRemovalLogsRejection(t *testing.T) {
+	api := &fakeAPI{details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41")}}
+	sc, st := newTestScanner(t, api, &fakeDisc{}, &fakeNtfy{})
+	defer st.Close()
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.Upsert(ctx, &store.Record{
+		EntityID: "e1", Name: "Item e1", Status: store.StatusAttached,
+		DocURL: "http://x/gone.pdf", FirstSeen: now, LastChecked: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sc.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rej, _ := st.EventURLs(ctx, "e1", store.EvDocReject)
+	if len(rej) != 1 || rej[0] != "http://x/gone.pdf" {
+		t.Fatalf("sweep removal must log a doc.reject event, got %v", rej)
+	}
+	rec, _ := st.Get(ctx, "e1")
+	if rec.Status != store.StatusNew || rec.DocURL != "" {
+		t.Fatalf("removal must reset for retry, got %+v", rec)
+	}
+}

@@ -693,6 +693,15 @@ func (s *Scanner) recordDecision(ctx context.Context, detail *homebox.EntityOut,
 	if err := s.store.RecordDecision(ctx, d); err != nil {
 		log.Printf("ledger record %s: %v", detail.ID, err)
 	}
+	// Full audit: empty-handed passes are events too (attach/link/review have
+	// dedicated events at their call sites).
+	if outcome == "notfound" {
+		extra := "no acceptable candidate"
+		if res != nil {
+			extra = fmt.Sprintf("no acceptable candidate (stage=%s candidates=%d)", res.Stage, len(res.Candidates))
+		}
+		s.event(ctx, detail, store.EvNotFound, dc.Name, "", extra)
+	}
 }
 
 // linkManual records online doc sources in custom fields — "<Field>" for a
@@ -774,6 +783,7 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 			// PDF-magic or wrong-class checks — an official parts list must
 			// still not attach as the manual.
 			log.Printf("content skim rejected %q [%s] (%s); trying fallback candidates", detail.Name, dc.Name, best.URL)
+			s.event(ctx, detail, store.EvSkimVeto, dc.Name, best.URL, "content skim rejected; trying fallbacks")
 			best, data = s.downloadFallback(ctx, res, item, dc)
 			if best == nil {
 				res.Best = nil
@@ -938,8 +948,18 @@ func (s *Scanner) recordError(ctx context.Context, sum *homebox.EntitySummary, c
 // event appends an activity-log row for a scanner action (M2/D26–D27: written
 // synchronously at the decision point; aggregation is read-time SQL).
 func (s *Scanner) event(ctx context.Context, detail *homebox.EntityOut, kind, class, url, extra string) {
+	s.actorEvent(ctx, detail, store.ActorScanner, kind, class, url, extra)
+}
+
+// userEvent logs an action the scanner *detected* but the user performed
+// (artifact deleted in Homebox, machine value corrected).
+func (s *Scanner) userEvent(ctx context.Context, detail *homebox.EntityOut, kind, class, url, extra string) {
+	s.actorEvent(ctx, detail, store.ActorUser, kind, class, url, extra)
+}
+
+func (s *Scanner) actorEvent(ctx context.Context, detail *homebox.EntityOut, actor, kind, class, url, extra string) {
 	err := s.store.AppendEvent(ctx, &store.Event{
-		EntityID: detail.ID, EntityName: detail.Name, Actor: store.ActorScanner,
+		EntityID: detail.ID, EntityName: detail.Name, Actor: actor,
 		Kind: kind, Class: class, URL: url, Detail: extra,
 	})
 	if err != nil {
