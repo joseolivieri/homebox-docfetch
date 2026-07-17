@@ -1,0 +1,59 @@
+# Dev config — `make dev` (native go run + searxng container). Committed on
+# purpose: no secrets (env refs only), localhost URLs, fast schedules.
+# Production reference lives in config.example.yaml.
+
+homebox:
+  url: ${DOCFETCH_HOMEBOX_URL}      # from .env — the Homebox instance to test against
+  token: ${HOMEBOX_TOKEN}
+  page_size: 100
+
+llm:
+  base_url: https://openrouter.ai/api/v1
+  api_key: ${OPENROUTER_API_KEY}
+  rerank_model: "meta-llama/llama-3.1-8b-instruct"
+  vision_model: "google/gemini-2.5-flash-lite"
+
+tags:
+  unverified: "docfetch/unverified"
+  provenance: "source/docfetch"
+
+# ntfy off in dev (empty url = no-op sender); review prompts land in the
+# events log (portal /log) and stdout instead.
+notify:
+  ntfy_url: ""
+  ntfy_topic: ""
+
+notes:
+  breadcrumb: true
+
+state_db: ./data/dev.db
+
+intake:
+  # All interfaces so a phone on the same network can reach the portal
+  # (http://<dev-machine-LAN-IP>:8099). No auth — dev machine's network only.
+  listen: ":8099"
+  public_url: http://localhost:8099
+
+curation:
+  schedule:
+    scan_new: "*/2 * * * *"          # dev: tight loop
+    followup: "0 4 * * 0"
+    change_poll: 10s
+  discovery:
+    searxng_url: http://localhost:8080   # `make searxng` exposes it here
+    language: en
+    region: us
+    rate_limit_per_min: 30
+  docs:
+    auto_attach_threshold: 0.8
+    skip_if_exists: true
+  enrich:
+    enabled: true
+    fill_only: true
+  photo:
+    enabled: true
+    min_confidence: 0.75
+  warranty:
+    enabled: true
+  reconcile:
+    digest_schedule: "0 9 * * 1"

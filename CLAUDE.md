@@ -1,16 +1,22 @@
 # homebox-docfetch — Claude Instructions
 
-Go sidecar that enriches a Homebox inventory (the **entity-model fork**, NOT classic
-Homebox) purely via its REST API. Two strictly separated stages:
+Go sidecar that enriches a Homebox inventory (the **entity model** — upstream since the
+June 2026 release; NOT the pre-entity API) purely via its REST API. Two strictly
+separated stages, one process (`docfetch serve`, D25):
 
-- **Intake** (`docfetch portal`, `internal/portal`) — phone photo-intake PWA. Vision-model
-  calls only; NO web egress (offline-LLM-ready).
-- **Curation** (`docfetch scheduler`, `internal/scheduler`) — recurring scanner owning ALL
+- **Intake** (`internal/portal`) — phone photo-intake PWA. Vision-model
+  calls only; NO web egress (offline-LLM-ready). The boundary is package-level:
+  `internal/portal` must never import discovery/egress code.
+- **Curation** (`internal/scheduler`) — recurring scanner owning ALL
   web egress: metadata enrichment (fill-only, corroborated), per-class document fetching
   (manual/parts/quickstart/datasheet), official photos, warranty, tagging.
 
-Stages share nothing but Homebox itself; the entity **notes block** is the bus between them
-(`- qr/rejected/approved [label](url)` semantic lines, `internal/notes`).
+The **shared sqlite event store** is the bus between them (M2/D26, `internal/store/events.go`):
+qr/approve/reject are deduped signal events; the portal `trigger`s immediate scanner
+processing (DB writes don't bump `updatedAt`, so the change-poll can't see them). Entity
+notes carry only a one-line breadcrumb (`internal/notes` `Breadcrumb`). Activity log:
+portal `/log` pages or `docfetch log`. No legacy notes-bus compatibility — pre-M2
+collections are reset, not migrated. See `docs/plan-architecture-v2.md`.
 
 ## Read order (before touching code)
 

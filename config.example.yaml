@@ -29,10 +29,16 @@ notify:
   ntfy_token: ${NTFY_TOKEN}         # optional; required if the topic restricts publish
 
 notes:
-  # Opt-in: log a terse line for EVERY derived write (intake photos, official
-  # photo, warranty, metadata) with confidence scores. Off = only doc
-  # attach/link events are logged. URLs always render as short markdown links.
-  audit_log: true
+  # One-line status (artifact classes present + portal log link) kept in each
+  # entity's notes. The full audit trail lives in the events table — see the
+  # portal /log pages or `docfetch log`. Default true.
+  breadcrumb: true
+  # Audit events older than this are pruned in the weekly reconcile. Signal
+  # events (qr/approve/reject) are permanent and never pruned. Default 365.
+  event_retention_days: 365
+  # DEPRECATED (ignored since M2): per-write notes audit moved to the events
+  # table.
+  # audit_log: true
 
 state_db: /data/docfetch.db
 
@@ -44,6 +50,9 @@ state_db: /data/docfetch.db
 intake:
   listen: ":8099"
   public_url: https://docfetch.ingress-1.jentaculum.net   # target of ntfy action buttons
+  # Serve the activity log on the portal: /log pages + the near-live event
+  # feed on the post-create screen. Default true.
+  live_log: true
   location_entity_type: "Location"
   photos: [sticker, receipt, product, warranty]
 

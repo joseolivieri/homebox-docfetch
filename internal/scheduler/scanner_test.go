@@ -373,3 +373,107 @@ func TestSkimPromotesGatedCandidate(t *testing.T) {
 		t.Fatalf("expected attached, got %s", rec.Status)
 	}
 }
+
+func TestRejectedEventFiltersCandidate(t *testing.T) {
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+	}
+	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/bad.pdf", ModelMatch: true}, Confidence: 0.9}, body: []byte("%PDF-1.4")}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+	_ = st.AppendEvent(context.Background(), &store.Event{
+		EntityID: "e1", Kind: store.EvDocReject, URL: "http://x/bad.pdf", Actor: store.ActorUser,
+	})
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatal("rejected URL must never attach")
+	}
+}
+
+func TestApproveEventFulfilled(t *testing.T) {
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+	}
+	disc := &fakeDisc{body: []byte("%PDF-1.4 approved doc")}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+	_ = st.AppendEvent(context.Background(), &store.Event{
+		EntityID: "e1", Kind: store.EvDocApprove, URL: "http://x/human-approved.pdf", Actor: store.ActorUser,
+	})
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("approve event must attach, uploads=%d", api.uploads)
+	}
+	if disc.discCalls != 0 {
+		t.Fatal("approved URL must skip discovery")
+	}
+	rec, _ := st.Get(context.Background(), "e1")
+	if rec.Status != store.StatusAttached || rec.DocURL != "http://x/human-approved.pdf" {
+		t.Fatalf("record not updated: %+v", rec)
+	}
+}
+
+func TestLinkManualNeverLinksUnverifiedPDF(t *testing.T) {
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41")},
+	}
+	// Non-official PDF the skim cannot confirm + a support page: the PDF must
+	// not be linked (content-unverified), only the web page.
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best:       &discovery.Candidate{URL: "http://other-co.example/WH41manual.pdf", IsPDF: true},
+			BestHTML:   &discovery.Candidate{URL: "http://acme.example/support", IsHTML: true, ModelMatch: true},
+			Confidence: 0.4,
+		},
+		body:        []byte("%PDF-1.4 wrong product"),
+		skimConfirm: false,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatal("unconfirmed pdf must not attach")
+	}
+	rec, _ := st.Get(context.Background(), "e1")
+	if rec.Status != store.StatusAttached || rec.DocURL != "http://acme.example/support" {
+		t.Fatalf("want web link only, got status=%s doc=%s", rec.Status, rec.DocURL)
+	}
+}
+
+func TestSweepRemovalLogsRejection(t *testing.T) {
+	api := &fakeAPI{details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41")}}
+	sc, st := newTestScanner(t, api, &fakeDisc{}, &fakeNtfy{})
+	defer st.Close()
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.Upsert(ctx, &store.Record{
+		EntityID: "e1", Name: "Item e1", Status: store.StatusAttached,
+		DocURL: "http://x/gone.pdf", FirstSeen: now, LastChecked: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sc.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rej, _ := st.EventURLs(ctx, "e1", store.EvDocReject)
+	if len(rej) != 1 || rej[0] != "http://x/gone.pdf" {
+		t.Fatalf("sweep removal must log a doc.reject event, got %v", rej)
+	}
+	rec, _ := st.Get(ctx, "e1")
+	if rec.Status != store.StatusNew || rec.DocURL != "" {
+		t.Fatalf("removal must reset for retry, got %+v", rec)
+	}
+}

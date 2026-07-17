@@ -52,6 +52,10 @@ func decodeQRs(images []llm.IntakeImage) []string {
 
 // usableQRURL keeps http(s) links that could plausibly lead to product
 // support. App-store installs, social links, and payment codes are noise.
+// Video platforms (YouTube/Vimeo) pass: makers print QR codes to their
+// channel/support videos (observed live: a water timer's QR → the company's
+// YouTube page), and those links are provenance for the future
+// maintenance-resources milestone even though the doc pipeline skips them.
 func usableQRURL(u string) bool {
 	l := strings.ToLower(u)
 	if !strings.HasPrefix(l, "http://") && !strings.HasPrefix(l, "https://") {
@@ -60,7 +64,7 @@ func usableQRURL(u string) bool {
 	for _, bad := range []string{
 		"play.google.com", "apps.apple.com", "itunes.apple.com", "onelink.me",
 		"app.adjust.com", "facebook.com", "instagram.com", "twitter.com",
-		"x.com/", "youtube.com", "tiktok.com", "wa.me", "t.me",
+		"x.com/", "tiktok.com", "wa.me", "t.me",
 		"paypal.", "venmo.", "cash.app",
 	} {
 		if strings.Contains(l, bad) {

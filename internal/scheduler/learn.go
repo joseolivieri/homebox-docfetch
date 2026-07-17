@@ -33,6 +33,16 @@ func (s *Scanner) Reconcile(ctx context.Context) error {
 	}
 	s.sweepOverrides(ctx)
 
+	// Retention: audit events age out; signal events (qr/approve/reject) are
+	// permanent state and exempt (D27).
+	if s.cfg.EventRetention > 0 {
+		if n, err := s.store.PruneEvents(ctx, time.Now().Add(-s.cfg.EventRetention)); err != nil {
+			log.Printf("reconcile: prune events: %v", err)
+		} else if n > 0 {
+			log.Printf("reconcile: pruned %d old events", n)
+		}
+	}
+
 	list, err := s.api.ListEntities(ctx, 1, 1, []string{s.unverifiedTagID})
 	if err != nil {
 		return err
@@ -115,6 +125,9 @@ func (s *Scanner) sweepOverrides(ctx context.Context) {
 			if n, _ := s.store.LabelDecisions(ctx, rec.EntityID, rec.DocURL, store.LabelRejected, "override"); n > 0 {
 				log.Printf("override: %q removed manual %s — labeled rejected", detail.Name, rec.DocURL)
 			}
+			// A user deletion IS a rejection: signal event (permanent, deduped)
+			// so the rescan-driven rejection shows in the log like any other.
+			s.userEvent(ctx, detail, store.EvDocReject, s.cfg.manualClass().Name, rec.DocURL, "removed via Homebox (sweep) — rejected, refetching")
 			rec.Status = store.StatusNew
 			rec.Attempts = 0
 			rec.DocURL, rec.DocSHA256, rec.LastAttached = "", "", nil
@@ -167,6 +180,8 @@ func (s *Scanner) sweepEnrichOverrides(ctx context.Context, detail *homebox.Enti
 		e.Superseded = true
 		if err := s.store.RecordEnrichment(ctx, e); err == nil {
 			log.Printf("override: %q %s changed %q -> %q — superseded", detail.Name, e.Field, e.Value, current)
+			s.userEvent(ctx, detail, store.EvEnrichOverride, e.Field, "",
+				fmt.Sprintf("user changed %s %q -> %q; machine value superseded, never refilled", e.Field, e.Value, current))
 		}
 	}
 }

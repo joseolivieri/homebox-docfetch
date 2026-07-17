@@ -1,4 +1,7 @@
-package scheduler
+// Package sign provides the HMAC scheme for the portal's one-tap action links
+// (ntfy Attach/Reject buttons). It lives in a neutral package so the portal
+// does not import the scheduler (the stages share signing, not behavior).
+package sign
 
 import (
 	"crypto/hmac"
@@ -10,7 +13,7 @@ import (
 
 // ActionSig signs an (action, entity id, doc url) triple for the portal's
 // one-tap ntfy endpoints. Key = the Homebox API token (already shared by both
-// processes via config), so a crafted URL without it cannot attach or reject
+// stages via config), so a crafted URL without it cannot attach or reject
 // anything. The action verb is part of the MAC so an approve link cannot be
 // replayed against the reject endpoint or vice versa.
 func ActionSig(action, entityID, docURL, key string) string {

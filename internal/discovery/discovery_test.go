@@ -70,3 +70,36 @@ func TestNorm(t *testing.T) {
 		t.Fatalf("norm mismatch: %q", norm("W-1 000!"))
 	}
 }
+
+func TestBestHTMLSkipsMarketplacePages(t *testing.T) {
+	cands := []Candidate{
+		{URL: "https://www.ebay.com/shop/widget?_nkw=widget", IsHTML: true, ModelMatch: true, Score: 3},
+		{URL: "https://www.youtube.com/watch?v=abc", IsHTML: true, ModelMatch: true, Score: 3},
+		{URL: "https://acme.example/support/widget", IsHTML: true, ModelMatch: true, Score: 1},
+	}
+	best := bestHTML(cands)
+	if best == nil || best.URL != "https://acme.example/support/widget" {
+		t.Fatalf("marketplace/video pages must not win bestHTML, got %+v", best)
+	}
+	if bestHTML(cands[:2]) != nil {
+		t.Fatal("only marketplace candidates -> no web link at all")
+	}
+}
+
+func TestPlatformPagesNeverWebLinkOrBrandSeed(t *testing.T) {
+	for _, u := range []string{
+		"https://www.youtube.com/@AcmeTimers",
+		"https://youtu.be/abc123",
+		"https://www.facebook.com/acme",
+	} {
+		if !isPlatformPage(u) {
+			t.Fatalf("platform page not flagged: %s", u)
+		}
+		if !isMarketplacePage(u) {
+			t.Fatalf("platform page must be excluded from web links: %s", u)
+		}
+	}
+	if isPlatformPage("https://support.acme.example/manuals") {
+		t.Fatal("real support page wrongly flagged")
+	}
+}

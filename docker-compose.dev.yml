@@ -1,0 +1,17 @@
+# Dev override: `docker compose -f docker-compose.yml -f docker-compose.dev.yml …`
+# (the Makefile wraps this — use `make dev-docker`). Exposes searxng on
+# loopback so a native `go run ./cmd/docfetch serve` can reach it, and mounts
+# the container-adjusted dev config the Makefile generates into ./data/.
+services:
+  docfetch:
+    volumes:
+      - ./data/docker:/data
+      - ./data/config.docker.yaml:/config/config.yaml:ro
+    environment:
+      DOCFETCH_HOMEBOX_URL: ${DOCFETCH_HOMEBOX_URL}
+    ports:
+      - "127.0.0.1:8099:8099"
+
+  searxng:
+    ports:
+      - "127.0.0.1:8080:8080"
