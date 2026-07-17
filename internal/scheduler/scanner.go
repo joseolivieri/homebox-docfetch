@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joseolivieri/homebox-docfetch/internal/discovery"
@@ -105,6 +106,13 @@ type Scanner struct {
 	cfg      Config
 	enricher Enricher // nil = enrichment disabled
 
+	// inflight guards per-entity processing: a fresh intake can be hit by the
+	// portal trigger, the change-poll scan, and the cron scan nearly at once,
+	// and concurrent process() runs double-attach photos/docs (observed live:
+	// duplicate official photo + a stray third pick on one intake).
+	inflightMu sync.Mutex
+	inflight   map[string]bool
+
 	// Curation extras (nil = disabled): web search + vision surfaces.
 	curSearch   CurationSearch
 	vision      Vision
@@ -123,7 +131,25 @@ func NewScanner(api EntityAPI, disc Discoverer, n Notifier, st *store.Store, cfg
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = 24 * time.Hour
 	}
-	return &Scanner{api: api, disc: disc, ntfy: n, store: st, cfg: cfg}
+	return &Scanner{api: api, disc: disc, ntfy: n, store: st, cfg: cfg, inflight: map[string]bool{}}
+}
+
+// tryAcquire marks an entity as being processed. False = another goroutine is
+// already on it; the caller skips (state converges on the next tick).
+func (s *Scanner) tryAcquire(id string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if s.inflight[id] {
+		return false
+	}
+	s.inflight[id] = true
+	return true
+}
+
+func (s *Scanner) release(id string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.inflight, id)
 }
 
 // SetEnricher enables metadata enrichment (Phase 1.5).
@@ -205,6 +231,11 @@ func (s *Scanner) ProcessEntity(ctx context.Context, id string) error {
 }
 
 func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, followup bool) error {
+	if !s.tryAcquire(sum.ID) {
+		log.Printf("skip %q (%s): already being processed", sum.Name, sum.ID)
+		return nil
+	}
+	defer s.release(sum.ID)
 	now := time.Now()
 	rec, err := s.store.Get(ctx, sum.ID)
 	if err != nil {
