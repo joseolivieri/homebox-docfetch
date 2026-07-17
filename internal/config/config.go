@@ -90,7 +90,14 @@ type Intake struct {
 	PublicURL          string   `yaml:"public_url"` // e.g. https://docfetch.ingress-1...; target of ntfy action buttons
 	LocationEntityType string   `yaml:"location_entity_type"`
 	Photos             []string `yaml:"photos"` // intake photo slots (documentation; UI is fixed)
+
+	// LiveLog serves the activity log on the portal (/log pages + the
+	// near-live event feed on the post-create screen). Default true.
+	LiveLog *bool `yaml:"live_log"`
 }
+
+// LiveLogEnabled resolves the live-log default (on unless disabled).
+func (i Intake) LiveLogEnabled() bool { return i.LiveLog == nil || *i.LiveLog }
 
 // Curation — stage 2, the recurring scanner. All web searching happens here.
 type Curation struct {

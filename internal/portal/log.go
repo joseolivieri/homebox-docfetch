@@ -11,6 +11,10 @@ import (
 // and /log/{entityID} (full per-item history). Server-rendered HTML, no JS —
 // the "instructionally cheap" surface for the events table (M2).
 func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.Intake.LiveLogEnabled() {
+		http.NotFound(w, r)
+		return
+	}
 	entityID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/log"), "/")
 	limit := 100
 	if entityID != "" {
@@ -86,6 +90,41 @@ a{color:#7aa2f7;text-decoration:none;word-break:break-all}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(b.String()))
+}
+
+// handleEvents is the JSON feed behind the post-create near-live log panel:
+// GET /api/events?entity=ID -> newest-first compact event rows.
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.Intake.LiveLogEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	id := r.URL.Query().Get("entity")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("missing entity"))
+		return
+	}
+	events, err := s.st.Events(r.Context(), id, 40)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	type row struct {
+		Ts     string `json:"ts"`
+		Actor  string `json:"actor"`
+		Kind   string `json:"kind"`
+		Class  string `json:"class"`
+		URL    string `json:"url"`
+		Detail string `json:"detail"`
+	}
+	out := make([]row, 0, len(events))
+	for _, e := range events {
+		out = append(out, row{
+			Ts: e.Ts.Local().Format("15:04:05"), Actor: e.Actor, Kind: e.Kind,
+			Class: e.Class, URL: e.URL, Detail: e.Detail,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // shortURL abbreviates a URL for display: host + trailing path element.

@@ -183,9 +183,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		s.trigger(ent.ID)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
-		"id":  ent.ID,
-		"url": strings.TrimRight(s.cfg.Homebox.URL, "/") + "/item/" + ent.ID,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      ent.ID,
+		"url":     strings.TrimRight(s.cfg.Homebox.URL, "/") + "/item/" + ent.ID,
+		"liveLog": s.cfg.Intake.LiveLogEnabled(),
 	})
 }
 

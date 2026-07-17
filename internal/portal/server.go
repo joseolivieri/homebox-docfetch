@@ -76,6 +76,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/reject", s.handleReject)
 	mux.HandleFunc("/log", s.handleLog)
 	mux.HandleFunc("/log/", s.handleLog)
+	mux.HandleFunc("/api/events", s.handleEvents)
 
 	srv := &http.Server{
 		Addr:              s.cfg.Intake.Listen,
