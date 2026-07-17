@@ -29,6 +29,15 @@ func (e *Engine) qrCandidates(ctx context.Context, it Item) []Candidate {
 		if finalURL == "" {
 			continue
 		}
+		// Platform targets (a maker's YouTube channel, social page): real
+		// manufacturer provenance — the qr.link event keeps it for the future
+		// resources milestone — but useless for doc discovery: no PDFs to
+		// harvest, and the platform must never seed the brand-domain cache
+		// or become a "(web)" support link.
+		if isPlatformPage(finalURL) {
+			log.Printf("qr stage: platform target (kept as provenance only): %s", finalURL)
+			continue
+		}
 		e.seedBrandCache(it.Manufacturer, finalURL)
 
 		if strings.Contains(contentType, "application/pdf") || strings.HasSuffix(strings.ToLower(finalURL), ".pdf") {

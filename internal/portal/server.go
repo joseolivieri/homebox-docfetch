@@ -153,15 +153,22 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// Vision reads the text-bearing photos; QR decode runs on EVERY uploaded
+	// photo field (generic over the multipart keys, so future one-off photo
+	// slots are covered automatically — some makers print QR codes all over
+	// the product).
 	var visionImages, qrImages []llm.IntakeImage
 	for _, field := range []string{"sticker", "receipt", "warranty"} {
 		if img, ok := formImage(r, field); ok {
 			visionImages = append(visionImages, img)
-			qrImages = append(qrImages, img)
 		}
 	}
-	if img, ok := formImage(r, "product"); ok {
-		qrImages = append(qrImages, img) // QR decode only — never sent to the vision model
+	if r.MultipartForm != nil {
+		for field := range r.MultipartForm.File {
+			if img, ok := formImage(r, field); ok {
+				qrImages = append(qrImages, img)
+			}
+		}
 	}
 	if len(qrImages) == 0 {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("no photos submitted"))

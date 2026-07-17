@@ -56,6 +56,14 @@ Format: decisions are immutable once logged (append a new entry to reverse one).
 
 ## Deferred / future (not in scope now)
 
+- **Modern resources (agreed 2026-07-17 — plan-architecture-v2 M6).** Official/community
+  maintenance & repair videos and simple-fix guides as curated per-item links (custom
+  fields, not attachments). Non-promotional only. QR targets on video/social platforms are
+  already recorded as `qr.link` events (provenance: the maker printed the link on the
+  product — e.g. a water timer's QR → the company's YouTube page) while the doc pipeline
+  skips them: never brand-domain-seeded, never a "(web)" link, no PDF harvest. Build-ahead
+  constraints: resource classes config-driven like doc classes; official-channel >
+  community trust tiers; promotional content is a veto class.
 - **Provider standardization (agreed 2026-07-08 — do as the FIRST step of the next new
   curation source).** Formalize the four curation steps (docs/enrich/photo/warranty) behind a
   common interface, enabling drop-in sources (RecallProvider, SpecificationProvider,

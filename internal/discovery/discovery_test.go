@@ -85,3 +85,21 @@ func TestBestHTMLSkipsMarketplacePages(t *testing.T) {
 		t.Fatal("only marketplace candidates -> no web link at all")
 	}
 }
+
+func TestPlatformPagesNeverWebLinkOrBrandSeed(t *testing.T) {
+	for _, u := range []string{
+		"https://www.youtube.com/@AcmeTimers",
+		"https://youtu.be/abc123",
+		"https://www.facebook.com/acme",
+	} {
+		if !isPlatformPage(u) {
+			t.Fatalf("platform page not flagged: %s", u)
+		}
+		if !isMarketplacePage(u) {
+			t.Fatalf("platform page must be excluded from web links: %s", u)
+		}
+	}
+	if isPlatformPage("https://support.acme.example/manuals") {
+		t.Fatal("real support page wrongly flagged")
+	}
+}

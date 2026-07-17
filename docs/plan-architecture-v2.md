@@ -257,6 +257,7 @@ new interface needed (§3.2).
 | **M3** | Provider seams: SearchProvider (searxng only), notifier URL scheme, Ollama-verified LLM path + degradation matrix; **upstream entity-API parity audit** (§3.1) + spec.md update; migrations framework; healthz/metrics/check; config minimization. | Low-medium |
 | **M4** | Public-release prep: quickstart docs, setup-variance matrix, semver v1.0 tag, backup guidance, README for external users. **Release gate.** | Low |
 | **M5** | Learning Phase B: golden-set replay harness off events+decisions. C–D remain deferred. Legacy-Homebox adapter only if demand materializes. | Low |
+| **M6** | **Modern resources**: official/community maintenance & repair videos, simple-fix guides — curated non-promotional links per item (new resource classes beside the doc classes; video links live in custom fields, not attachments). Raw material already accumulating: qr.link events record platform targets (a maker's YouTube channel) as provenance even though the doc pipeline skips them. Design constraints to honor while building earlier milestones: resource classes stay config-driven like doc classes; provenance tiers (official channel > community) mirror the doc trust model; promotional content is a veto class. | Medium — quality gating for community content is the hard part |
 
 M1 and M2 are separable commits/PRs; M2 is the architectural payload.
 
