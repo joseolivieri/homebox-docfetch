@@ -24,21 +24,71 @@ reference deployment exists as the `docfetch` Ansible role in the author's priva
 **New here? Start with [`docs/how-it-works.md`](docs/how-it-works.md)** — a plain-language
 walkthrough of the whole pipeline (intake, enrichment, manual discovery, review gate, learning loop).
 
-## Dev quickstart
+## Local testing
+
+Everything custom runs on your dev machine; only Homebox and the LLM are remote:
+
+```
+your dev machine                            elsewhere
+┌─────────────────────────────────┐
+│ docfetch serve (native go run)  │──REST──▶ Homebox instance   (yours, any host)
+│   scanner + portal :8099        │──HTTPS─▶ OpenRouter         (or any OpenAI-
+│ searxng (docker) :8080 loopback │          compatible endpoint; optional)
+└─────────────▲───────────────────┘
+              │ http://<LAN-IP>:8099
+        your phone (same Wi-Fi)
+```
+
+### Prerequisites
+
+- Go 1.26+, Docker (for the SearXNG container), `make`
+- A **Homebox** instance (entity model, post-June-2026) and an API token
+  (Homebox UI → user profile → API tokens, `hb_k-…`)
+- Optional: an OpenRouter API key (or any OpenAI-compatible endpoint via
+  `llm.base_url`). Without it the pipeline runs rules-only: no metadata
+  enrichment, no vision intake, no content skim.
+
+> **Use a disposable collection.** The pipeline tags, enriches, and attaches
+> documents to every item it can see. Point `DOCFETCH_HOMEBOX_URL` at an
+> instance (or account) whose inventory you can afford to reset.
+
+### Run it
 
 ```bash
 make env       # creates .env — uncomment + fill DOCFETCH_HOMEBOX_URL, HOMEBOX_TOKEN, OPENROUTER_API_KEY
-make dev       # searxng in docker (loopback :8080) + native `go run serve` on config.dev.yaml
+make dev       # starts searxng (docker, loopback :8080) + native `go run serve`
 ```
 
-Portal + activity log: http://localhost:8099 (log at `/log`). Other targets:
-`make once` (single scan pass), `make log` (events in the terminal), `make probe`
-(Homebox client smoke test), `make dev-docker` (full stack containerized),
-`make reset` (wipe dev state — collections are disposable in dev, D26),
-`make check` (build + tests). Dev state lives in `./data/` (gitignored).
+`config.dev.yaml` drives this: fast schedules (2-minute scan, 10s change-poll),
+ntfy off (review prompts appear in the activity log instead), state in
+`./data/dev.db` (gitignored). First scan pass starts within 2 minutes and
+processes the whole collection.
 
-Point it at a Homebox instance whose collection you can afford to reset — the
-pipeline tags, enriches, and attaches to whatever it sees.
+- Portal (photo intake): http://localhost:8099
+- Activity log: http://localhost:8099/log — every attach/link/review/enrich
+  event, per-item history at `/log/{entityID}`
+- Terminal: `make log`
+
+### Phone testing (camera intake)
+
+The portal listens on all interfaces in dev. On a phone on the same network:
+
+1. Find the dev machine's LAN IP (`ipconfig getifaddr en0` on macOS).
+2. Open `http://<LAN-IP>:8099` on the phone.
+3. Snap the model sticker / receipt — photo capture uses the native file-input
+   camera, which works over plain HTTP.
+
+Caveats: "Add to Home Screen" (PWA install / service worker) requires HTTPS,
+so test that against a TLS deployment — the intake flow itself does not need
+it. The dev portal has no auth; it binds to whatever network your dev machine
+is on. A Tailscale IP works the same way if the phone is on your tailnet.
+
+### Other targets
+
+`make once` (single scan pass) · `make probe` (Homebox client smoke test —
+creates and deletes a temp entity) · `make dev-docker` (full stack
+containerized, closest to production shape) · `make reset` (wipe local state;
+collections are disposable in dev, D26) · `make check` (build + tests).
 
 ## Agent read order
 

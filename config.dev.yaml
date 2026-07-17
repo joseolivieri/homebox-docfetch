@@ -29,7 +29,9 @@ notes:
 state_db: ./data/dev.db
 
 intake:
-  listen: "127.0.0.1:8099"
+  # All interfaces so a phone on the same network can reach the portal
+  # (http://<dev-machine-LAN-IP>:8099). No auth — dev machine's network only.
+  listen: ":8099"
   public_url: http://localhost:8099
 
 curation:
