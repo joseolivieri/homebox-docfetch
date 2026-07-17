@@ -339,7 +339,7 @@ func bestHTML(cands []Candidate) *Candidate {
 	var best *Candidate
 	for i := range cands {
 		c := &cands[i]
-		if !c.IsHTML || !c.ModelMatch {
+		if !c.IsHTML || !c.ModelMatch || isMarketplacePage(c.URL) {
 			continue
 		}
 		if best == nil || c.Score > best.Score || (c.Official && !best.Official) {
@@ -347,6 +347,24 @@ func bestHTML(cands []Candidate) *Candidate {
 		}
 	}
 	return best
+}
+
+// isMarketplacePage flags listing/search pages and video sites that must
+// never become a "<Field> (web)" support link — a marketplace search result
+// is not documentation (observed live: an eBay shop search linked as the
+// manual page for a water timer).
+func isMarketplacePage(u string) bool {
+	l := strings.ToLower(u)
+	for _, bad := range []string{
+		"ebay.", "amazon.", "walmart.", "aliexpress.", "alibaba.", "etsy.",
+		"temu.", "wish.com", "mercari", "rakuten.", "shopee.",
+		"youtube.", "youtu.be", "vimeo.", "tiktok.",
+	} {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyModelGate zeroes confidence when a model match is required but absent.

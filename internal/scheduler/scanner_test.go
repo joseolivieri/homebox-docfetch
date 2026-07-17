@@ -420,3 +420,34 @@ func TestApproveEventFulfilled(t *testing.T) {
 		t.Fatalf("record not updated: %+v", rec)
 	}
 }
+
+func TestLinkManualNeverLinksUnverifiedPDF(t *testing.T) {
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41")},
+	}
+	// Non-official PDF the skim cannot confirm + a support page: the PDF must
+	// not be linked (content-unverified), only the web page.
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best:       &discovery.Candidate{URL: "http://other-co.example/WH41manual.pdf", IsPDF: true},
+			BestHTML:   &discovery.Candidate{URL: "http://acme.example/support", IsHTML: true, ModelMatch: true},
+			Confidence: 0.4,
+		},
+		body:        []byte("%PDF-1.4 wrong product"),
+		skimConfirm: false,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatal("unconfirmed pdf must not attach")
+	}
+	rec, _ := st.Get(context.Background(), "e1")
+	if rec.Status != store.StatusAttached || rec.DocURL != "http://acme.example/support" {
+		t.Fatalf("want web link only, got status=%s doc=%s", rec.Status, rec.DocURL)
+	}
+}

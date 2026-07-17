@@ -707,7 +707,12 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 	upd := fullUpdateFrom(fresh)
 	var links []string
 	docURL := ""
-	if res.Best != nil && res.Best.IsPDF {
+	// Only an OFFICIAL remote PDF may be linked: everything that reaches this
+	// path is content-unverified (skim failed or the download was bot-walled),
+	// and linking a non-official unverified PDF shipped a wrong-company manual
+	// (observed live: an Ecowitt sensor PDF linked on a water timer). Official
+	// provenance is the one signal that survives without reading the bytes.
+	if res.Best != nil && res.Best.IsPDF && res.Best.Official {
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", res.Best.URL))
 		links = append(links, notes.MDLink("pdf", res.Best.URL))
 		docURL = res.Best.URL
