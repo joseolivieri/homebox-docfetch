@@ -48,3 +48,14 @@ func TestBreadcrumbIdempotent(t *testing.T) {
 		t.Fatalf("breadcrumb must be stable:\n%q\n%q", once, twice)
 	}
 }
+
+func TestBreadcrumbLine(t *testing.T) {
+	got := BreadcrumbLine(7, "https://portal.example/", "e1")
+	want := "docfetch: 7 updates — [log](https://portal.example/log/e1)"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if got := BreadcrumbLine(1, "", "e1"); got != "docfetch: 1 update" {
+		t.Fatalf("singular/no-portal: %q", got)
+	}
+}

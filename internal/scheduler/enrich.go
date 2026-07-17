@@ -102,7 +102,7 @@ func (s *Scanner) enrichEntity(ctx context.Context, detail *homebox.EntityOut) (
 			wroteCategory = fr.Value
 		}
 	}
-	s.setBreadcrumb(&upd, detail.Notes, detail)
+	s.setBreadcrumb(ctx, &upd, detail.Notes, detail)
 	// Keep existing tags; add unverified so a human reviews the machine fill.
 	tagIDs := []string{s.unverifiedTagID}
 	for _, t := range detail.Tags {

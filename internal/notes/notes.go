@@ -15,6 +15,7 @@
 package notes
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -41,6 +42,20 @@ func Target(s string) string {
 		return m[1]
 	}
 	return strings.TrimRight(bareURL.FindString(s), ".,;")
+}
+
+// BreadcrumbLine renders the one and only notes line: the service name, how
+// many updates the pipeline has made to the item, and the activity-log link.
+func BreadcrumbLine(count int, portalURL, entityID string) string {
+	unit := "updates"
+	if count == 1 {
+		unit = "update"
+	}
+	line := fmt.Sprintf("docfetch: %d %s", count, unit)
+	if portalURL != "" {
+		line += " — " + MDLink("log", strings.TrimRight(portalURL, "/")+"/log/"+entityID)
+	}
+	return line
 }
 
 // Breadcrumb replaces the docfetch block's content with a single status line,

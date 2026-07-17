@@ -740,7 +740,7 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 		}
 		return s.reviewGate(ctx, detail, res, base)
 	}
-	s.setBreadcrumb(&upd, fresh.Notes, fresh, dc.Name)
+	s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		return err
 	}
@@ -810,7 +810,7 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 	// field) + refresh the breadcrumb; the audit line is an event now.
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		s.setBreadcrumb(&upd, updated.Notes, updated, dc.Name)
+		s.setBreadcrumb(ctx, &upd, updated.Notes, updated)
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", best.URL))
 		if res.BestHTML != nil && res.BestHTML.Official {
 			upd.Fields = homebox.UpsertField(upd.Fields, dc.Field+" (web)", notes.MDLink("web", res.BestHTML.URL))
@@ -967,45 +967,20 @@ func (s *Scanner) actorEvent(ctx context.Context, detail *homebox.EntityOut, act
 	}
 }
 
-// breadcrumbLine renders the one-line notes status: artifact classes present
-// on the item plus the portal log link. extras count as present — the caller
-// is writing them in the same PUT, so the passed detail predates them.
-func (s *Scanner) breadcrumbLine(detail *homebox.EntityOut, extras ...string) string {
-	have := map[string]bool{}
-	for _, e := range extras {
-		have[e] = true
-	}
-	var parts []string
-	for _, dc := range s.cfg.DocClasses {
-		if dc.Enabled && (have[dc.Name] || hasDoc(detail, dc)) {
-			parts = append(parts, dc.Name+" ✓")
-		}
-	}
-	if have["photo"] || hasOfficialPhoto(detail) {
-		parts = append(parts, "photo ✓")
-	}
-	if have["warranty"] || detail.WarrantyExpires != "" || detail.LifetimeWarranty {
-		parts = append(parts, "warranty ✓")
-	}
-	status := "searching"
-	if len(parts) > 0 {
-		status = strings.Join(parts, " · ")
-	}
-	line := "docfetch: " + status
-	if s.cfg.PortalURL != "" {
-		line += " — " + notes.MDLink("log", s.cfg.PortalURL+"/log/"+detail.ID)
-	}
-	return line
-}
-
-// setBreadcrumb replaces the notes docfetch block with the one-line status.
-// No-op when disabled or when the rendered notes value is unchanged (avoids a
-// pointless updatedAt bump).
-func (s *Scanner) setBreadcrumb(upd *homebox.EntityUpdate, existing string, detail *homebox.EntityOut, extras ...string) {
+// setBreadcrumb replaces the notes docfetch block with the single status
+// line: "docfetch: N updates — [log](…)". N is the entity's event count at
+// PUT time (an event written just after this PUT shows on the next rewrite —
+// the log page is the precise surface). No-op when disabled or when the
+// rendered notes value is unchanged (avoids a pointless updatedAt bump).
+func (s *Scanner) setBreadcrumb(ctx context.Context, upd *homebox.EntityUpdate, existing string, detail *homebox.EntityOut) {
 	if !s.cfg.Breadcrumb {
 		return
 	}
-	n := notes.Breadcrumb(existing, s.breadcrumbLine(detail, extras...))
+	count, err := s.store.CountEvents(ctx, detail.ID)
+	if err != nil {
+		return
+	}
+	n := notes.Breadcrumb(existing, notes.BreadcrumbLine(count, s.cfg.PortalURL, detail.ID))
 	if n != existing {
 		upd.Notes = &n
 	}

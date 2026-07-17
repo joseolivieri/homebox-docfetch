@@ -153,6 +153,14 @@ FROM events`
 	return out, rows.Err()
 }
 
+// CountEvents returns how many events an entity has — the "N updates" figure
+// in the notes breadcrumb.
+func (s *Store) CountEvents(ctx context.Context, entityID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE entity_id=?`, entityID).Scan(&n)
+	return n, err
+}
+
 // PruneEvents deletes audit events older than the retention window. Signal
 // kinds (qr/approve/reject) are permanent state and never pruned (D27).
 func (s *Store) PruneEvents(ctx context.Context, olderThan time.Time) (int64, error) {

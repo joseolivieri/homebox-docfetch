@@ -126,11 +126,8 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 			got = append(got, f)
 		}
 	}
-	line := "docfetch: intake ✓"
-	if pub := strings.TrimRight(s.cfg.Intake.PublicURL, "/"); pub != "" {
-		line += " — " + notes.MDLink("log", pub+"/log/"+ent.ID)
-	}
-	note := notes.Breadcrumb("", line)
+	// Count matches the events appended below (intake.created + one per QR).
+	note := notes.Breadcrumb("", notes.BreadcrumbLine(1+len(qrURLs), s.cfg.Intake.PublicURL, ent.ID))
 	upd.Notes = &note
 	if _, err := s.hb.PutEntity(ctx, ent.ID, upd); err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("metadata put: %w", err))

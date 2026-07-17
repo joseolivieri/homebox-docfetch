@@ -56,7 +56,7 @@ func (s *Scanner) attachApproved(ctx context.Context, detail *homebox.EntityOut,
 	}
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		s.setBreadcrumb(&upd, updated.Notes, updated, dc.Name)
+		s.setBreadcrumb(ctx, &upd, updated.Notes, updated)
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", url))
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("approve note put %s: %v", detail.ID, err)
@@ -178,7 +178,7 @@ func (s *Scanner) attachPhoto(ctx context.Context, detail *homebox.EntityOut, ch
 
 	if fresh, err := s.api.GetEntity(ctx, detail.ID); err == nil {
 		upd := fullUpdateFrom(fresh)
-		s.setBreadcrumb(&upd, fresh.Notes, fresh, "photo")
+		s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
 		if upd.Notes != nil { // breadcrumb changed; otherwise skip the PUT entirely
 			if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 				log.Printf("photo %s: note put: %v", detail.ID, err)
@@ -303,7 +303,7 @@ func (s *Scanner) curateWarranty(ctx context.Context, detail *homebox.EntityOut)
 	default:
 		return
 	}
-	s.setBreadcrumb(&upd, fresh.Notes, fresh, "warranty")
+	s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		log.Printf("warranty put %s: %v", detail.ID, err)
 		return
