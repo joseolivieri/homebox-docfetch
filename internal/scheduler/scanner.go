@@ -976,11 +976,11 @@ func (s *Scanner) setBreadcrumb(ctx context.Context, upd *homebox.EntityUpdate, 
 	if !s.cfg.Breadcrumb {
 		return
 	}
-	count, err := s.store.CountEvents(ctx, detail.ID)
+	count, last, err := s.store.EventStats(ctx, detail.ID)
 	if err != nil {
 		return
 	}
-	n := notes.Breadcrumb(existing, notes.BreadcrumbLine(count, s.cfg.PortalURL, detail.ID))
+	n := notes.Breadcrumb(existing, notes.BreadcrumbLine(count, last, s.cfg.PortalURL, detail.ID))
 	if n != existing {
 		upd.Notes = &n
 	}

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -45,13 +46,17 @@ func Target(s string) string {
 }
 
 // BreadcrumbLine renders the one and only notes line: the service name, how
-// many updates the pipeline has made to the item, and the activity-log link.
-func BreadcrumbLine(count int, portalURL, entityID string) string {
+// many updates the pipeline has made to the item, when the last one happened,
+// and the activity-log link. A zero last omits the timestamp.
+func BreadcrumbLine(count int, last time.Time, portalURL, entityID string) string {
 	unit := "updates"
 	if count == 1 {
 		unit = "update"
 	}
 	line := fmt.Sprintf("docfetch: %d %s", count, unit)
+	if !last.IsZero() {
+		line += " · last " + last.Local().Format("2006-01-02 15:04")
+	}
 	if portalURL != "" {
 		line += " — " + MDLink("log", strings.TrimRight(portalURL, "/")+"/log/"+entityID)
 	}

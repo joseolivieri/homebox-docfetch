@@ -3,6 +3,7 @@ package notes
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTarget(t *testing.T) {
@@ -50,12 +51,13 @@ func TestBreadcrumbIdempotent(t *testing.T) {
 }
 
 func TestBreadcrumbLine(t *testing.T) {
-	got := BreadcrumbLine(7, "https://portal.example/", "e1")
-	want := "docfetch: 7 updates — [log](https://portal.example/log/e1)"
+	ts := time.Date(2026, 7, 17, 15, 4, 0, 0, time.Local)
+	got := BreadcrumbLine(7, ts, "https://portal.example/", "e1")
+	want := "docfetch: 7 updates · last 2026-07-17 15:04 — [log](https://portal.example/log/e1)"
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
-	if got := BreadcrumbLine(1, "", "e1"); got != "docfetch: 1 update" {
-		t.Fatalf("singular/no-portal: %q", got)
+	if got := BreadcrumbLine(1, time.Time{}, "", "e1"); got != "docfetch: 1 update" {
+		t.Fatalf("singular/no-portal/no-ts: %q", got)
 	}
 }

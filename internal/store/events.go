@@ -153,12 +153,20 @@ FROM events`
 	return out, rows.Err()
 }
 
-// CountEvents returns how many events an entity has — the "N updates" figure
-// in the notes breadcrumb.
-func (s *Store) CountEvents(ctx context.Context, entityID string) (int, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events WHERE entity_id=?`, entityID).Scan(&n)
-	return n, err
+// EventStats returns how many events an entity has and the newest event's
+// timestamp — the "N updates · <when>" figures in the notes breadcrumb.
+// last is the zero time when the entity has no events.
+func (s *Store) EventStats(ctx context.Context, entityID string) (count int, last time.Time, err error) {
+	if err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE entity_id=?`, entityID).Scan(&count); err != nil {
+		return 0, time.Time{}, err
+	}
+	if count == 0 {
+		return 0, time.Time{}, nil
+	}
+	err = s.db.QueryRowContext(ctx,
+		`SELECT ts FROM events WHERE entity_id=? ORDER BY id DESC LIMIT 1`, entityID).Scan(&last)
+	return count, last, err
 }
 
 // PruneEvents deletes audit events older than the retention window. Signal
