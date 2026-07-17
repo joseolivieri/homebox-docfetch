@@ -159,17 +159,13 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
 
 async function extract() {
   const btn = $('extractBtn');
-  // Product photo carries no extractable text — only send the other three.
+  // All photos go to extract: sticker/receipt/warranty feed the vision model,
+  // the product photo is QR-scanned only (support QRs sit on hang-tags too).
   const fd = new FormData();
   let any = false;
-  for (const s of ['sticker', 'receipt', 'warranty'])
+  for (const s of ['sticker', 'receipt', 'warranty', 'product'])
     if (files[s]) { fd.append(s, files[s]); any = true; }
-  if (!any && files['product']) {
-    // Product-only intake: skip extraction, go straight to a blank confirm form.
-    $('confirm').style.display = 'block';
-    $('confirm').scrollIntoView({behavior: 'smooth'});
-    return;
-  }
+  if (!any) return;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Reading…';
   $('capErr').textContent = '';

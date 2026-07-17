@@ -139,9 +139,11 @@ func (s *Server) handleLocations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, locs)
 }
 
-// handleExtract accepts intake photos (multipart fields sticker/receipt/warranty
-// — the personal product photo is not sent here; it carries no extractable data)
-// and returns the vision extraction for the confirm screen.
+// handleExtract accepts intake photos and returns the vision extraction for
+// the confirm screen. Sticker/receipt/warranty feed the vision model; the
+// personal product photo carries no extractable *text* but is still QR-scanned
+// — support QRs sit on hang-tags and the product body, not just the model
+// label (observed live: a water timer's QR was only in the product shot).
 func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -151,28 +153,36 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	var images []llm.IntakeImage
+	var visionImages, qrImages []llm.IntakeImage
 	for _, field := range []string{"sticker", "receipt", "warranty"} {
 		if img, ok := formImage(r, field); ok {
-			images = append(images, img)
+			visionImages = append(visionImages, img)
+			qrImages = append(qrImages, img)
 		}
 	}
-	if len(images) == 0 {
+	if img, ok := formImage(r, "product"); ok {
+		qrImages = append(qrImages, img) // QR decode only — never sent to the vision model
+	}
+	if len(qrImages) == 0 {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("no photos submitted"))
 		return
 	}
-	ex, err := s.ai.ExtractIntake(r.Context(), s.cfg.LLM.VisionModel, images)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err)
-		return
+	ex := &llm.IntakeExtraction{}
+	if len(visionImages) > 0 {
+		var err error
+		ex, err = s.ai.ExtractIntake(r.Context(), s.cfg.LLM.VisionModel, visionImages)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err)
+			return
+		}
 	}
 
 	// Local QR decode (no network): manufacturer-printed support links from
-	// the labels ride along to the confirm screen.
+	// the photos ride along to the confirm screen.
 	resp := struct {
 		*llm.IntakeExtraction
 		QRUrls []string `json:"qrUrls"`
-	}{ex, decodeQRs(images)}
+	}{ex, decodeQRs(qrImages)}
 
 	// Stateless: the client re-sends the photos with /api/create for attaching.
 	writeJSON(w, http.StatusOK, resp)
