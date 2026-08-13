@@ -447,15 +447,103 @@ chasing payloads it should not.
 
 | # | Change | Cost |
 |---|---|---|
-| **A7** | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event | ~0 |
+| **A7** | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event — **prerequisite for §7's resolver fast path** | ~0 |
 | **A8** | QR payload classifier + GS1 AI parser (Digital Link / element string / Transparency SGTIN → GTIN + serial); stop chasing non-support payloads | ~0, ~50 lines |
 | **A9** | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
 | **B3** | Extra-photo UI + filesystem staging with TTL (kills double upload, feeds B0's corpus) | ~½ session |
-| **C2** | GTIN → product-database lookup as a curation provider (**provider standardization first**) | new source + interface work |
+| **C2** | GTIN/FCC/Matter → **resolver** lookups — see §7, which supersedes this row | new source + interface work |
 | **C3** | Matter setup-code parsing (vendor/product ID) + certification marks as inventory metadata | prompt + fields |
 | **C4** | EU Digital Product Passport resolution — design the seam now, build when codes appear | future |
 
-## 7. Accuracy backlog (beyond the above)
+## 7. Deterministic resolvers — asking instead of searching
+
+This is the highest-ceiling idea in this document. Every identifier §6 extracts
+(GTIN, FCC ID, Matter VID/PID) is a **key into a public database that already
+knows where the manual is**. Where a resolver answers, the entire
+search-and-guess pipeline is unnecessary.
+
+### 7.1 The inversion
+
+```
+today          identity → search → rules+rerank → download → skim → gate → attach
+with resolver  identity → resolver → authoritative doc URL → attach
+```
+
+Everything the middle of the pipeline exists to do — rank noisy candidates,
+detect re-host spam, confirm the doc is the right product — is *definitionally*
+satisfied when the manufacturer's own resolver hands back the link for that
+exact GTIN. No rerank call, no skim download, no review gate. **Cheaper and
+more accurate at the same time**, which nothing else in this document is.
+
+That makes resolvers a **new trust tier above official-first** (D24), and a new
+first stage in the discovery ladder:
+
+```
+resolve → qr → brand-site → web-pdf → web-html
+```
+
+### 7.2 What actually exists
+
+| Resolver | Key | Returns | Availability |
+|---|---|---|---|
+| **GS1 Digital Link resolver** | GTIN | A **linkset**: request `Accept: application/linkset+json` or `?linkType=linkset` and get every link the brand published for that GTIN, each typed by the GS1 link-type vocabulary (`gs1:pip` product information page, `gs1:instructions`, `gs1:safetyInfo`, `gs1:certificationInfo`, …). Ask for the instructions link type and you are asking the brand for the manual | Public HTTP, no key. Coverage is the catch — it depends on the brand running/registering a resolver. **Sunrise 2027 is the inflection point** |
+| **CSA Matter Distributed Compliance Ledger** | Matter VID + PID | Certification status, commissioning instructions, **links to product manuals**, product info, firmware version. Public **REST** API | Live now, no key. Covers Matter-certified smart-home devices |
+| **FCC Equipment Authorization (OET/EAS)** | FCC ID | Grant records plus filing **exhibits — which routinely include the user manual as a PDF hosted on fcc.gov** | Public. Covers anything with a radio: huge share of modern electronics |
+| Verified by GS1 / national GS1 registries | GTIN | Brand, product description, image | Partly membership-gated; useful for *identity*, not docs |
+| Open GTIN databases (UPCitemdb, Open Food Facts, …) | GTIN | Name, brand, sometimes images | Free, coverage patchy and consumer-goods skewed. Fallback only |
+| **Amazon Transparency** | T-code | Authenticity + brand-configured content | ❌ **Not usable.** The customer-facing content layer is real, but it is gated behind Amazon's own scanning app, and the Transparency APIs are provisioning/verification endpoints for *enrolled brand owners* — there is no third-party lookup. Its value to docfetch is only the **GTIN + serial embedded in the SGTIN form** (§6.4) |
+
+### 7.3 Why this changes the priority of §6
+
+Identifier extraction (A7/A8) looked like an identity-accuracy improvement. It
+is actually **the key to the fast path**: a decoded GTIN is not just a better
+search term, it is a resolver query that can return the manufacturer's own
+manual link with no search at all. That raises A7/A8 from "nice, free" to
+"prerequisite for the best thing in the roadmap".
+
+### 7.4 Architecture: resolvers are not search providers
+
+`SearchProvider` (plan M3, §4.1) returns *candidates requiring verification*.
+A resolver returns an *authoritative answer*. Different contract, different
+trust tier, different position in the ladder — so it is a **separate
+interface**, not another SearchProvider implementation:
+
+```go
+type ResolverProvider interface {
+    // Resolve returns typed documents for an identifier, or nil when the
+    // resolver has no record. A hit is treated as official provenance.
+    Resolve(ctx context.Context, id Identifier) ([]ResolvedDoc, error)
+}
+```
+
+with `gs1`, `matter-dcl`, `fcc` implementations. This is precisely the
+"provider standardization" backlog item, and resolvers — not a second search
+engine — are the trigger that finally justifies doing it.
+
+### 7.5 Honest limits
+
+- **Coverage is thin today.** DCL covers Matter devices only; FCC covers radio
+  devices only; GS1 Digital Link coverage depends on brand adoption and is
+  early (Sunrise 2027 is the bet, not the present). Resolvers are a **fast
+  path, not a replacement** — search stays as the fallback for everything else,
+  which is most of a homelab inventory today (the water timer resolves nowhere).
+- **A resolver hit still needs the content-class check.** "The brand's link for
+  this GTIN" can still be a spec sheet rather than a manual; keep the class
+  gate, drop only the product-identity checks.
+- **Do not send unit-unique serials to resolvers** — query the GTIN (AI 01),
+  never the serial (AI 21). Same privacy rule as §6.4.
+
+### 7.6 Sequencing
+
+| # | Change | Cost |
+|---|---|---|
+| **B4** | `ResolverProvider` interface + `resolve` as ladder stage 0 (provider standardization lands here) | ~1 session |
+| **B5** | FCC ID resolver — highest present-day coverage for electronics, and filings carry actual manuals | ~½ session |
+| **B6** | Matter DCL resolver — small, public REST, exact manual links for smart-home devices | ~½ session |
+| **C5** | GS1 Digital Link resolver + linkset parsing — low coverage now, the strategic bet on Sunrise 2027 | ~½ session |
+| — | Open GTIN databases as an identity fallback only | opportunistic |
+
+## 8. Accuracy backlog (beyond the above)
 
 - **Community/official maintenance resources** (plan M6): repair videos,
   simple-fix guides; non-promotional gating is the hard part. QR platform
