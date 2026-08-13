@@ -26,6 +26,7 @@ collections are reset, not migrated. See `docs/plan-architecture-v2.md`.
 2. `docs/decisions.md` — locked decisions D1–D24 + backlog. **Append a new D-row whenever a
    design decision is made**; that file is the design memory.
 3. `docs/how-it-works.md` — plain-language pipeline walkthrough.
+   `docs/pipeline-accuracy.md` — where the decision pipeline is weak + ranked fixes.
 4. Phase boards: `docs/phase-1-scheduler.md`, `docs/phase-1.5-enrich.md`, `docs/phase-2-portal.md`.
 
 ## Hard-won API/runtime facts (violations caused real bugs)
