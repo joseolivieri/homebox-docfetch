@@ -160,6 +160,9 @@ a { color:var(--link); }
 #logBox { display:flex; flex-direction:column; flex:1; min-height:0; }
 .logbox { flex:1; min-height:0; border:1px solid var(--border); border-radius:8px; background:var(--field);
   overflow:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+/* What the pipeline knows, above what it did. Content-sized so it cannot
+   crowd out the event list it sits over. */
+.logbox.facts { flex:none; max-height:38%; margin-bottom:10px; }
 .logtbl { border-collapse:collapse; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   font-size:.72rem; line-height:1.5; white-space:nowrap; }
 .logtbl td, .logtbl th { padding:2px 10px 2px 0; text-align:left; }

@@ -1,10 +1,13 @@
 package portal
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
 	"strings"
+
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 // handleLog renders the activity log: /log (recent events across all items)
@@ -38,6 +41,9 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	// scrolling body, and the action bar pinned to the bottom.
 	var b strings.Builder
 	shellOpen(&b, title, true)
+	if entityID != "" {
+		s.writeFacts(r.Context(), &b, entityID)
+	}
 	b.WriteString(`<div class="logbox"><table class="logtbl"><thead><tr><th>when</th>`)
 	if entityID == "" {
 		b.WriteString(`<th>item</th>`)
@@ -81,6 +87,41 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(b.String()))
+}
+
+// writeFacts renders what the pipeline knows about an item above its events.
+//
+// This is the answer to "where do the facts live" rather than a second link in
+// the notes breadcrumb: the identifiers an owner actually reads (GTIN, FCC ID,
+// unit serial) are written onto the Homebox item as real fields, where they
+// are visible and searchable; everything else is pipeline internals, and
+// belongs next to the events that produced it. One link, one destination.
+func (s *Server) writeFacts(ctx context.Context, b *strings.Builder, entityID string) {
+	facts, err := s.st.Facts(ctx, entityID, "")
+	if err != nil || len(facts) == 0 {
+		return
+	}
+	label := map[string]string{
+		store.FactGTIN: "GTIN", store.FactFCCID: "FCC ID",
+		store.FactUnitSerial: "unit serial", store.FactProductType: "product type",
+		store.FactFieldConf: "read confidence", store.FactLeadURL: "product page",
+		store.FactSupportURL: "support",
+	}
+	b.WriteString(`<div class="logbox facts"><table class="logtbl"><tbody>`)
+	for _, f := range facts {
+		name := label[f.Kind]
+		if name == "" {
+			name = f.Kind
+		}
+		val := html.EscapeString(f.Value)
+		if strings.HasPrefix(f.Value, "http") {
+			val = fmt.Sprintf(`<a href="%s">%s</a>`,
+				html.EscapeString(f.Value), html.EscapeString(shortURL(f.Value)))
+		}
+		fmt.Fprintf(b, `<tr><td class="lk">%s</td><td class="ld">%s</td><td class="lt">%s</td></tr>`,
+			html.EscapeString(name), val, html.EscapeString(f.Source))
+	}
+	b.WriteString(`</tbody></table></div>`)
 }
 
 // handleEvents is the JSON feed behind the post-create near-live log panel:
