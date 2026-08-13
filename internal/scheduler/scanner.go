@@ -47,8 +47,11 @@ type Discoverer interface {
 // DocClassCfg is one fetchable document class for the scanner: label, Homebox
 // attachment type, and the category gate that limits it to relevant items.
 type DocClassCfg struct {
-	Name       string
-	Field      string
+	Name  string
+	Field string
+	// Link classes are satisfied by an official URL in the field: no download,
+	// no content skim, no attachment. See config.DocClass.Kind.
+	Link       bool
 	AttachAs   string
 	Categories []string
 	Enabled    bool
@@ -362,6 +365,10 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 			continue
 		}
 		cres := s.disc.SelectClass(ctx, item, res.Candidates, dc.Name)
+		if dc.Link {
+			s.fetchLink(ctx, detail, cres, dc)
+			continue
+		}
 		s.fetchSecondary(ctx, detail, item, cres, dc)
 	}
 
@@ -479,6 +486,58 @@ func (s *Scanner) fetchSecondary(ctx context.Context, detail *homebox.EntityOut,
 		return
 	}
 	s.recordDecision(ctx, detail, res, dc, "notfound", "")
+}
+
+// fetchLink satisfies a link class: record the maker's own page for this model
+// in the class field. No download, no skim, no attachment — the artifact IS
+// the URL (a product page, a firmware index, a techspecs page), and a great
+// deal of hardware publishes nothing else.
+//
+// The gate is deliberately narrow: official domain AND matched to this model.
+// Anything looser would fill the field with review sites and marketplace
+// listings, which is worse than leaving it empty. Secondary by nature — no
+// ntfy prompt, no store status.
+func (s *Scanner) fetchLink(ctx context.Context, detail *homebox.EntityOut, res *discovery.Result, dc DocClassCfg) {
+	best := bestOfficialLink(res.Candidates)
+	if best == nil {
+		s.recordDecision(ctx, detail, res, dc, "notfound", "")
+		return
+	}
+	fresh, err := s.api.GetEntity(ctx, detail.ID)
+	if err != nil {
+		log.Printf("link %q [%s]: %v", detail.Name, dc.Name, err)
+		return
+	}
+	upd := fullUpdateFrom(fresh)
+	upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("web", best.URL))
+	s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
+	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
+		log.Printf("link %q [%s]: %v", detail.Name, dc.Name, err)
+		return
+	}
+	log.Printf("%s linked for %q — %s", dc.Name, detail.Name, best.URL)
+	s.event(ctx, detail, store.EvDocLink, dc.Name, best.URL, "official page")
+	s.recordDecision(ctx, detail, res, dc, "linked", best.URL)
+}
+
+// bestOfficialLink picks the official, model-matched page for a link class,
+// preferring an HTML page over a file: a link class exists precisely for the
+// artifacts that are pages.
+func bestOfficialLink(cands []discovery.Candidate) *discovery.Candidate {
+	if c := bestOfficialHTML(cands); c != nil {
+		return c
+	}
+	var best *discovery.Candidate
+	for i := range cands {
+		c := &cands[i]
+		if !c.Official || !c.ModelMatch {
+			continue
+		}
+		if best == nil || c.Score > best.Score {
+			best = c
+		}
+	}
+	return best
 }
 
 // officialFirst content-reads the best official PDF candidate when the pick

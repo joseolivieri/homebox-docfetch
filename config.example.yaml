@@ -125,6 +125,32 @@ curation:
         enabled: false
         keywords: [datasheet, "data sheet", specification, "spec sheet", "technical data"]
         queries: ["{subject} datasheet filetype:pdf"]
+      # Link classes (kind: link): the artifact IS a URL — no download, no
+      # content skim, no attachment, just an official page recorded in the
+      # field. Much of modern hardware publishes no PDF at all, and forcing
+      # those into the file path is what makes the pipeline settle for a
+      # third-party rehost. Only an OFFICIAL page matched to the model is
+      # accepted; anything looser fills the field with marketplace listings.
+      - name: product
+        field: Product page
+        kind: link
+        enabled: true
+        keywords: [product, products, shop, store, buy, overview, techspecs, "tech-specs"]
+        queries: ["{subject} official product page"]
+      - name: specs
+        field: Specs
+        kind: link
+        enabled: true
+        keywords: [techspecs, "tech specs", specifications, specs, datasheet, "technical data"]
+        queries: ["{subject} specifications"]
+      # Firmware/driver indexes: the page you actually come back for.
+      - name: downloads
+        field: Downloads
+        kind: link
+        enabled: true
+        keywords: [download, downloads, firmware, driver, drivers, software, "support/downloads"]
+        queries: ["{subject} firmware download", "{subject} drivers download"]
+        categories: [network, networking, switch, router, "access point", modem, nas, server, computer, laptop, desktop, pc, motherboard, gpu, printer, nvr, camera, "smart home", electronics]
 
   # Metadata auto-completion. Fill-only: never overwrites human data. A field
   # writes only when >=min_agreeing_sources domains corroborate it AND the
