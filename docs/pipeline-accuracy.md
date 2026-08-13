@@ -688,7 +688,8 @@ product currently prioritizes them:
 
 | Channel | Fidelity | Notes |
 |---|---|---|
-| **PDF manual** (user has it locally) | **definitive** | the document *is* the answer — discovery is finished for that class before it starts |
+| **Human-entered fields / links** | **definitive for identity** | the person is holding the object; a typed model number or product URL beats every inferred source. Records confidence 1.0 |
+| **PDF manual** (user has it locally) | **definitive for the document** | the document *is* the answer — discovery is finished for that class before it starts |
 | **`.eml` order confirmation** | near-exact | structured; carries retailer SKU and often the **product URL**, which is a better lead than a model number |
 | **PDF invoice/receipt** | high | real text, no OCR ambiguity, exact date and price |
 | **Pasted text** (order email body, spec blurb) | high | zero file handling; literally the copy-paste this product replaces |
@@ -734,6 +735,44 @@ manual → `manual`, invoice → `receipt`, warranty doc → `warranty`, photos 
   wiring lands, means the weak-identity gate (R6) automatically trusts these
   paths more.
 
+#### Manual entry as a first-class path (not a fallback)
+
+Today there is **no way to create an item without a photo**: the "Read photos"
+button is disabled until a file exists (`index.html:277`) and `extract()`
+returns early with none (`index.html:304`). Review P8 argued the opposite —
+for installed appliances and worn labels, someone reading a model number with a
+flashlight *is* the best available channel, so manual entry should be excellent
+rather than tolerated.
+
+The confirm screen is already the right form: `createItem()` reads DOM values
+only and has no dependency on extraction state, and hash routing (§ portal
+work) already gives it a stable URL. So the whole feature is **one button and
+one route** — "Skip photos — enter manually" → `#/confirm` with an empty form.
+Photos remain addable afterwards via the existing "← Photos" button.
+
+#### Two link fields that cost no new pipeline machinery
+
+The confirm screen should also capture what photos structurally cannot: the
+user knowing *where the thing lives on the internet*. Two fields, and both map
+onto signal events that already exist and are already tested:
+
+| Field | Recorded as | What happens |
+|---|---|---|
+| **Product page URL** (brand site) | a lead event, read into `discovery.Item.HintURLs` alongside `qr.link` | the `qr` stage — already the first stage in the ladder — resolves it, harvests the page's PDFs as Official+ModelMatch candidates, and seeds the brand-domain cache. Identical treatment to a QR-scanned support page, because the provenance claim is the same strength: a human asserted it |
+| **Manual URL** ("I know where it is") | **`doc.approve`** — the exact event the ntfy Attach button writes | `processDocs` already checks `EventURLs(EvDocApprove)` (`scanner.go:303`) and calls `attachApproved`: download, attach, label confirmed, no discovery and no content re-verification because a human chose it |
+
+That second row is the notable one: **a user-supplied manual URL is already a
+solved case** — it is definitionally the same claim as tapping Attach on a
+review prompt. No new stage, no new code path, no new trust decision.
+
+Implementation note: `qr.link` is named for its origin. Rather than overloading
+it, add a sibling `lead.url` kind that discovery reads into `HintURLs`
+alongside it, so provenance stays distinguishable in the log (physical label vs
+human assertion) while the routing is shared.
+
+Both fields also benefit the *photo* path — a user who snapped a sticker can
+still paste the product page they had open.
+
 #### Constraints — do not build a document manager
 
 - **Typed by the user first, auto-classified later.** If the user says "this is
@@ -756,7 +795,9 @@ manual → `manual`, invoice → `receipt`, warranty doc → `warranty`, photos 
 
 | # | Change | Cost |
 |---|---|---|
-| **A10** | Paste box (text) + pasted product URL as a lead — no file handling at all | ~0 |
+| **A10** | "Skip photos — enter manually" button → `#/confirm` blank (form already works standalone) | ~0, one button |
+| **A10b** | Product-page URL field → `lead.url` event read into `HintURLs`; manual-URL field → `doc.approve` (both paths already exist) | ~0 |
+| **A10c** | Paste box (free text) parsed into the same fields | small |
 | **A11** | Typed PDF drop; user-declared class; attach manual/receipt/warranty directly | small |
 | **B7** | PDF text read for purchase/warranty fields (rides B2's extractor) | small after B2 |
 | **B8** | `.eml` drop — parse order confirmations, harvest product URL | ~½ session |
