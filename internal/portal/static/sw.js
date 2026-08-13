@@ -1,8 +1,8 @@
 // Minimal service worker: cache-first for the shell, network for everything
 // else. No offline queueing by design — the portal is Tailscale-only and used
 // at home; offline photo upload isn't worth the complexity.
-const CACHE = 'intake-v1';
-const SHELL = ['/', '/manifest.json', '/icon-180.png'];
+const CACHE = 'intake-v2';
+const SHELL = ['/', '/app.css', '/app.js', '/manifest.json', '/icon-180.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

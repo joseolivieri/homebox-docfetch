@@ -3,6 +3,7 @@ package portal
 import (
 	"crypto/hmac"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"strings"
@@ -94,10 +95,15 @@ func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, kin
 // tap (tiny confirmation page).
 func respondAction(w http.ResponseWriter, r *http.Request, name, msg string) {
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
-<body style="font-family:system-ui;background:#111318;color:#e6e6e9;display:grid;place-items:center;height:100vh;margin:0">
-<div style="text-align:center"><div style="font-size:2rem">✓</div><p>%s — %s</p></div></body>`, name, msg)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var b strings.Builder
+		shellOpen(&b, name, false)
+		fmt.Fprintf(&b, `<div class="card"><p class="ok">%s<span>%s</span></p></div>`,
+			iconChk, html.EscapeString(msg))
+		shellClose(&b,
+			action{href: "/log", icon: iconList, label: "Activity"},
+			action{href: "/", icon: iconBox, label: "Intake", primary: true})
+		_, _ = w.Write([]byte(b.String()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": msg, "item": name})
