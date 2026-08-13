@@ -95,9 +95,10 @@ func (s *Server) queueAction(w http.ResponseWriter, r *http.Request, action, kin
 func respondAction(w http.ResponseWriter, r *http.Request, name, msg string) {
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
-<body style="font-family:system-ui;background:#111318;color:#e6e6e9;display:grid;place-items:center;height:100vh;margin:0">
-<div style="text-align:center"><div style="font-size:2rem">✓</div><p>%s — %s</p></div></body>`, name, msg)
+		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">%s
+<body style="font-family:system-ui;background:var(--bg);color:var(--text);display:grid;place-items:center;height:100vh;margin:0">
+<div style="text-align:center"><div style="font-size:2rem">✓</div><p>%s — %s</p></div></body>`,
+			themeHead, name, msg)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": msg, "item": name})

@@ -39,16 +39,17 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	b.WriteString(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8">`)
 	fmt.Fprintf(&b, `<title>%s</title>`, html.EscapeString(title))
+	b.WriteString(themeHead)
 	b.WriteString(`<style>
-body{font-family:system-ui;background:#111318;color:#e6e6e9;margin:1rem;font-size:.9rem}
+body{font-family:system-ui;background:var(--bg);color:var(--text);margin:1rem;font-size:.9rem}
 h1{font-size:1.1rem}
 table{border-collapse:collapse;width:100%}
-td,th{padding:.35rem .6rem;border-bottom:1px solid #2a2d35;text-align:left;vertical-align:top}
-th{color:#9aa0ac;font-weight:600}
-a{color:#7aa2f7;text-decoration:none;word-break:break-all}
-.kind{white-space:nowrap;color:#c3e88d}
-.ts{white-space:nowrap;color:#9aa0ac}
-.actor{color:#9aa0ac}
+td,th{padding:.35rem .6rem;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+a{color:var(--link);text-decoration:none;word-break:break-all}
+.kind{white-space:nowrap;color:var(--kind)}
+.ts{white-space:nowrap;color:var(--muted)}
+.actor{color:var(--muted)}
 </style>`)
 	fmt.Fprintf(&b, `<h1>%s</h1>`, html.EscapeString(title))
 	if entityID != "" {
