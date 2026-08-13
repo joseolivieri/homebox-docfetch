@@ -9,21 +9,35 @@ import (
 	"strings"
 
 	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/datamatrix"
 	"github.com/makiuchi-d/gozxing/multi/qrcode"
+	"github.com/makiuchi-d/gozxing/oned"
 	_ "golang.org/x/image/webp"
 
 	"github.com/joseolivieri/homebox-docfetch/internal/llm"
 )
 
-// decodeQRs extracts http(s) URLs from QR codes in the intake photos —
-// manufacturers print support-page QR codes on model labels and warranty
-// cards. Decoding is pure-local (no network, no LLM), so it respects the
-// intake stage's vision-only egress boundary; the scanner follows the links.
-func decodeQRs(images []llm.IntakeImage) []string {
+// DecodedCode is one code read off an intake photo, already classified.
+type DecodedCode struct {
+	Format  string // QR | DataMatrix | EAN13 | UPCA | …
+	Payload Payload
+}
+
+// decodeCodes reads every machine-readable code in the intake photos: QR
+// (support links), DataMatrix (GS1 element strings, Amazon Transparency) and
+// 1D barcodes (UPC/EAN → GTIN). Decoding is pure-local — no network, no LLM —
+// so it respects the intake stage's vision-only egress boundary; curation
+// follows whatever is chaseable.
+func decodeCodes(images []llm.IntakeImage) []DecodedCode {
 	seen := map[string]bool{}
-	var out []string
-	reader := qrcode.NewQRCodeMultiReader()
+	var out []DecodedCode
 	hints := map[gozxing.DecodeHintType]any{gozxing.DecodeHintType_TRY_HARDER: true}
+
+	qr := qrcode.NewQRCodeMultiReader()
+	dm := datamatrix.NewDataMatrixReader()
+	upc := oned.NewMultiFormatUPCEANReader(hints)
+	c128 := oned.NewCode128Reader()
+
 	for _, im := range images {
 		img, _, err := image.Decode(bytes.NewReader(im.Data))
 		if err != nil {
@@ -33,18 +47,43 @@ func decodeQRs(images []llm.IntakeImage) []string {
 		if err != nil {
 			continue
 		}
-		results, err := reader.DecodeMultiple(bmp, hints)
-		if err != nil {
-			continue // no QR in this photo — normal
+
+		var raws []struct{ format, text string }
+		// QR can carry several codes in one frame; the rest read one each.
+		if results, err := qr.DecodeMultiple(bmp, hints); err == nil {
+			for _, r := range results {
+				raws = append(raws, struct{ format, text string }{"QR", r.GetText()})
+			}
 		}
-		for _, r := range results {
-			u := strings.TrimSpace(r.GetText())
-			if !usableQRURL(u) || seen[u] {
+		for _, rd := range []struct {
+			name   string
+			reader gozxing.Reader
+		}{{"DataMatrix", dm}, {"UPC/EAN", upc}, {"Code128", c128}} {
+			// Each reader consumes the bitmap's decode state; reset per try.
+			b2, err := gozxing.NewBinaryBitmapFromImage(img)
+			if err != nil {
 				continue
 			}
-			seen[u] = true
-			out = append(out, u)
-			log.Printf("intake: QR decoded -> %s", u)
+			if r, err := rd.reader.Decode(b2, hints); err == nil && r != nil {
+				raws = append(raws, struct{ format, text string }{rd.name, r.GetText()})
+			}
+		}
+
+		for _, raw := range raws {
+			txt := strings.TrimSpace(raw.text)
+			if txt == "" || seen[txt] {
+				continue
+			}
+			seen[txt] = true
+			p := ClassifyPayload(txt)
+			if p.Kind == PayloadNonWeb {
+				continue // WIFI:/mailto:/tel: — nothing to keep
+			}
+			if p.Kind == PayloadSupportURL && !usableQRURL(p.URL) {
+				continue // app-store / payment / social noise
+			}
+			out = append(out, DecodedCode{Format: raw.format, Payload: p})
+			log.Printf("intake: %s decoded (%s) -> %s", raw.format, p.Kind, txt)
 		}
 	}
 	return out

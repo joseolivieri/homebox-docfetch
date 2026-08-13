@@ -25,6 +25,7 @@ type IntakeExtraction struct {
 		ModelNumber  string `json:"modelNumber"`
 		SerialNumber string `json:"serialNumber"`
 		ProductType  string `json:"productType"`
+		FCCID        string `json:"fccId"`
 	} `json:"sticker"`
 	Receipt struct {
 		PurchaseFrom  string  `json:"purchaseFrom"`
@@ -39,6 +40,10 @@ type IntakeExtraction struct {
 	} `json:"warranty"`
 	Name       string             `json:"name"` // best canonical product name
 	Confidence map[string]float64 `json:"confidence"`
+	// Evidence maps a field to the verbatim label text it was read from.
+	// Shown under the field on the confirm screen: a model number sourced
+	// from "S/N: F8230…" is an obvious misread, where the value alone is not.
+	Evidence map[string]string `json:"evidence"`
 }
 
 // multimodal chat request types (OpenAI-compatible content-array form).
@@ -79,10 +84,15 @@ func (c *Client) ExtractIntake(ctx context.Context, visionModel string, images [
 		"warranty.durationMonths is the stated warranty length in months (e.g. '60 day' = 2, '1 year' = 12); " +
 		"warranty.claimsUrl is a claims/registration/support URL if shown; warranty.details is a short " +
 		"summary of the stated terms. name is the best canonical product name you can infer. " +
-		`Respond ONLY with JSON: {"sticker":{"manufacturer":"","modelNumber":"","serialNumber":"","productType":""},` +
+		"productType is the kind of product in plain words (e.g. 'hose timer', 'dishwasher'). " +
+		"fccId is an FCC equipment id if printed (e.g. '2AB3C-XYZ123'). " +
+		"evidence maps each extracted field to the VERBATIM text you read it from, so a human " +
+		"can spot a misread (e.g. taking a serial for a model number) at a glance. " +
+		`Respond ONLY with JSON: {"sticker":{"manufacturer":"","modelNumber":"","serialNumber":"","productType":"","fccId":""},` +
 		`"receipt":{"purchaseFrom":"","purchaseDate":"","purchasePrice":0,"nameHint":""},` +
 		`"warranty":{"durationMonths":0,"claimsUrl":"","details":""},` +
-		`"name":"","confidence":{"manufacturer":0,"modelNumber":0,"serialNumber":0,"name":0,"purchase":0,"warranty":0}}. No prose.`
+		`"name":"","confidence":{"manufacturer":0,"modelNumber":0,"serialNumber":0,"name":0,"purchase":0,"warranty":0},` +
+		`"evidence":{"manufacturer":"","modelNumber":"","serialNumber":""}}. No prose.`
 
 	parts := []mmPart{{Type: "text", Text: "Extract product identity and purchase info from these photos."}}
 	for _, img := range images {

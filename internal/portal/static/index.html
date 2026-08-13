@@ -52,6 +52,14 @@
   .toggle input { width:auto; accent-color:#3d7eff; }
   .err { color:#ff6b6b; font-size:.85rem; white-space:pre-wrap; }
   .err:empty { display:none; }
+  /* Evidence hint: the verbatim label text a field was read from, so a
+     misread (a serial taken for a model number) is obvious at a glance. */
+  .ev { font-family:ui-monospace,Menlo,monospace; font-size:.68rem; color:#6d7380;
+    margin:3px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ev.low { color:#e0a458; }
+  .ev:empty { display:none; }
+  .linkbtn { background:none; border:0; color:#7aa2f7; font-size:.85rem; padding:6px 0;
+    cursor:pointer; text-decoration:underline; }
   .ok { color:#51cf66; margin: 0 0 6px; }
   .sub { color:#9aa0ab; font-size:.85rem; margin: 0 0 10px; }
 
@@ -131,6 +139,8 @@
     <div class="actions">
       <div class="err" id="capErr"></div>
       <button class="btn primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
+      <!-- Secondary path: no photo available (installed appliance, worn label). -->
+      <button class="linkbtn" onclick="location.hash = '#/confirm'">Skip photos — enter details manually</button>
     </div>
   </div>
 
@@ -141,10 +151,11 @@
         <label>Name *</label><input id="c_name">
         <div class="row2">
           <div><label>Quantity</label><input id="c_quantity" type="number" inputmode="numeric" pattern="[0-9]*" min="1" step="1" value="1"></div>
-          <div><label>Model number</label><input id="c_modelNumber"></div>
+          <div><label>Model number</label><input id="c_modelNumber"><p class="ev" id="ev_modelNumber"></p></div>
         </div>
-        <label>Manufacturer</label><input id="c_manufacturer">
-        <label>Serial number</label><input id="c_serialNumber">
+        <label>Manufacturer</label><input id="c_manufacturer"><p class="ev" id="ev_manufacturer"></p>
+        <label>Serial number</label><input id="c_serialNumber"><p class="ev" id="ev_serialNumber"></p>
+        <label>Product type</label><input id="c_productType" placeholder="e.g. hose timer, dishwasher">
         <div class="row2">
           <div><label>Purchase date</label><input id="c_purchaseDate" type="date"></div>
           <div><label>Price</label><input id="c_purchasePrice" type="number" step="0.01" inputmode="decimal"></div>
@@ -159,6 +170,14 @@
           <label>QR links found on labels</label>
           <div id="qrList"></div>
         </div>
+        <div id="codeBox" style="display:none">
+          <label>Codes read from photos</label>
+          <p class="ev" id="codeInfo"></p>
+        </div>
+        <label>Product page (optional)</label>
+        <input id="c_productUrl" type="url" placeholder="https://brand.example/products/…">
+        <label>Manual URL (optional — attached directly)</label>
+        <input id="c_manualUrl" type="url" placeholder="https://…/manual.pdf">
         <label>Location (optional)</label>
         <select id="c_location"><option value="">— unset —</option></select>
         <div class="hint" id="photoHint"></div>
@@ -190,10 +209,15 @@
 <script>
 const $ = id => document.getElementById(id);
 const SLOTS = ['sticker', 'receipt', 'product', 'warranty'];
-const FIELDS = ['name','quantity','manufacturer','modelNumber','serialNumber','purchaseFrom',
-                'purchaseDate','purchasePrice','warrantyMonths','warrantyClaimsUrl','warrantyDetails'];
+const FIELDS = ['name','quantity','manufacturer','modelNumber','serialNumber','productType',
+                'purchaseFrom','purchaseDate','purchasePrice','warrantyMonths','warrantyClaimsUrl',
+                'warrantyDetails','productUrl','manualUrl'];
 let files = {};
 let logId = null;
+// Vision read confidence + verbatim source text per field, and codes decoded
+// locally. Kept out of the form: submitted as hidden values, shown as hints.
+let extractMeta = {confidence: {}, evidence: {}, gtin: '', codeSerial: '', fccId: ''};
+let editedFields = {};
 
 // Screen switcher: exactly one .screen active; each owns its scroll + actions.
 function show(id) {
@@ -235,6 +259,8 @@ function saveForm() {
   FIELDS.forEach(k => o[k] = $('c_' + k).value);
   o.location = $('c_location').value;
   o.qr = [...document.querySelectorAll('#qrList input')].map(cb => ({u: cb.value, on: cb.checked}));
+  o.meta = extractMeta;
+  o.edited = editedFields;
   sessionStorage.setItem('intake.form', JSON.stringify(o));
 }
 function restoreForm() {
@@ -242,13 +268,22 @@ function restoreForm() {
   if (!o) return;
   FIELDS.forEach(k => { if (o[k] != null) $('c_' + k).value = o[k]; });
   if (o.location) $('c_location').value = o.location;
+  if (o.meta) extractMeta = o.meta;
+  if (o.edited) editedFields = o.edited;
   if (o.qr && o.qr.length) {
     renderQRs(o.qr.map(q => q.u));
     document.querySelectorAll('#qrList input').forEach((cb, i) => cb.checked = !!o.qr[i].on);
   }
+  renderEvidence();
+  renderCodes();
 }
 document.addEventListener('DOMContentLoaded', () => {
-  $('confirm').addEventListener('input', saveForm);
+  $('confirm').addEventListener('input', e => {
+    // A field the human touched is theirs, not the model's — recorded at full
+    // confidence so the weak-identity gate trusts it.
+    if (e.target.id && e.target.id.startsWith('c_')) editedFields[e.target.id.slice(2)] = 1;
+    saveForm();
+  });
   route();
 });
 
@@ -319,6 +354,14 @@ async function extract() {
     $('c_warrantyMonths').value = j.warranty.durationMonths || '';
     $('c_warrantyClaimsUrl').value = j.warranty.claimsUrl || '';
     $('c_warrantyDetails').value = j.warranty.details || '';
+    $('c_productType').value = j.sticker.productType || '';
+    extractMeta = {
+      confidence: j.confidence || {}, evidence: j.evidence || {},
+      gtin: j.gtin || '', codeSerial: j.codeSerial || '', fccId: j.sticker.fccId || '',
+    };
+    editedFields = {};
+    renderEvidence();
+    renderCodes();
     renderQRs(j.qrUrls || []);
     saveForm();
     if (location.hash === '#/confirm') route(); else location.hash = '#/confirm';
@@ -328,6 +371,33 @@ async function extract() {
     btn.disabled = false;
     btn.textContent = 'Read photos';
   }
+}
+
+// Evidence hints: show the verbatim label text each field was read from, plus
+// the model's confidence. A model number sourced from "S/N: F8230…" is an
+// obvious misread; the value on its own gives the human nothing to check.
+function renderEvidence() {
+  for (const f of ['manufacturer', 'modelNumber', 'serialNumber']) {
+    const el = $('ev_' + f);
+    if (!el) continue;
+    const src = extractMeta.evidence[f], conf = extractMeta.confidence[f];
+    if (!src && conf == null) { el.textContent = ''; continue; }
+    let txt = src ? `read as “${src}”` : 'read from photo';
+    if (typeof conf === 'number') txt += ` · ${Math.round(conf * 100)}%`;
+    el.textContent = txt;
+    el.classList.toggle('low', typeof conf === 'number' && conf < 0.7);
+  }
+}
+
+// Codes decoded locally (no network): barcodes give a canonical product id,
+// which is a stronger identity signal than an OCR'd model number.
+function renderCodes() {
+  const bits = [];
+  if (extractMeta.gtin) bits.push('GTIN ' + extractMeta.gtin);
+  if (extractMeta.codeSerial) bits.push('unit serial ' + extractMeta.codeSerial);
+  if (extractMeta.fccId) bits.push('FCC ID ' + extractMeta.fccId);
+  $('codeInfo').textContent = bits.join(' · ');
+  $('codeBox').style.display = bits.length ? 'block' : 'none';
 }
 
 // QR links decoded from the label photos: checked links are stored on the
@@ -355,12 +425,20 @@ async function createItem() {
   btn.innerHTML = '<span class="spinner"></span>Creating…';
   $('confErr').textContent = '';
   const fd = new FormData();
-  for (const k of ['name','quantity','manufacturer','modelNumber','serialNumber','purchaseFrom',
-                   'purchaseDate','purchasePrice','warrantyMonths','warrantyClaimsUrl','warrantyDetails'])
-    fd.append(k, $('c_' + k).value.trim());
+  FIELDS.forEach(k => fd.append(k, $('c_' + k).value.trim())); // one list, no drift
   fd.append('locationId', $('c_location').value);
   // Confirmed QR links (decoded server-side from the labels, no network).
   document.querySelectorAll('#qrList input:checked').forEach(cb => fd.append('qrUrl', cb.value));
+  // Locally decoded identifiers + how the model read each field. Facts the
+  // photos are not re-derivable from once staged images age out.
+  fd.append('gtin', extractMeta.gtin || '');
+  fd.append('codeSerial', extractMeta.codeSerial || '');
+  fd.append('fccId', extractMeta.fccId || '');
+  for (const f of ['manufacturer', 'modelNumber', 'serialNumber', 'name']) {
+    const c = extractMeta.confidence[f];
+    if (typeof c === 'number') fd.append('conf_' + f, String(c));
+    if (editedFields[f]) fd.append('edited_' + f, '1');
+  }
   for (const s of ['sticker', 'receipt', 'product', 'warranty'])   // all photos attach to the item
     if (files[s]) fd.append(s, files[s]);
   try {

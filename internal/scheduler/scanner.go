@@ -304,14 +304,17 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 		return s.attachApproved(ctx, detail, approved[len(approved)-1], base, manual)
 	}
 
-	qrURLs, _ := s.store.EventURLs(ctx, detail.ID, store.EvQRLink)
+	// Trusted starting points, tried by the qr stage before any searching:
+	// links printed on the physical label (qr.link) and product pages the
+	// user supplied (lead.url). Different provenance, same strength of claim.
+	hints, _ := s.store.EventURLs(ctx, detail.ID, store.EvQRLink)
+	leads, _ := s.store.EventURLs(ctx, detail.ID, store.EvLeadURL)
+	hints = append(hints, leads...)
 	item := discovery.Item{
 		Manufacturer: detail.Manufacturer,
 		ModelNumber:  detail.ModelNumber,
 		Name:         detail.Name,
-		// Label QR links recorded at intake (qr.link events): the qr pipeline
-		// stage follows these before any searching.
-		HintURLs: qrURLs,
+		HintURLs:     hints,
 	}
 	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" && strings.TrimSpace(item.Name) == "" {
 		log.Printf("skip %q — no searchable identity", detail.Name)

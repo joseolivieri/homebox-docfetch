@@ -34,7 +34,8 @@ const (
 // and exempt from retention pruning. Everything else is audit history.
 const (
 	EvIntakeCreated  = "intake.created"
-	EvQRLink         = "qr.link"
+	EvQRLink         = "qr.link"  // support link decoded from a physical label
+	EvLeadURL        = "lead.url" // product/support page a human supplied
 	EvDocApprove     = "doc.approve"
 	EvDocReject      = "doc.reject" // ntfy Reject button OR artifact removed via Homebox (sweep)
 	EvDocAttach      = "doc.attach"
@@ -51,7 +52,7 @@ const (
 )
 
 // signalKinds are exempt from pruning and deduped per (entity, kind, url).
-var signalKinds = map[string]bool{EvQRLink: true, EvDocApprove: true, EvDocReject: true}
+var signalKinds = map[string]bool{EvQRLink: true, EvLeadURL: true, EvDocApprove: true, EvDocReject: true}
 
 func (s *Store) migrateEvents() error {
 	_, err := s.db.Exec(`
@@ -174,8 +175,8 @@ func (s *Store) EventStats(ctx context.Context, entityID string) (count int, las
 // kinds (qr/approve/reject) are permanent state and never pruned (D27).
 func (s *Store) PruneEvents(ctx context.Context, olderThan time.Time) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM events WHERE ts < ? AND kind NOT IN (?,?,?)`,
-		olderThan, EvQRLink, EvDocApprove, EvDocReject)
+		`DELETE FROM events WHERE ts < ? AND kind NOT IN (?,?,?,?)`,
+		olderThan, EvQRLink, EvLeadURL, EvDocApprove, EvDocReject)
 	if err != nil {
 		return 0, err
 	}

@@ -105,3 +105,46 @@ func TestEventsFilterAndOrder(t *testing.T) {
 		t.Fatalf("entity filter: want 2, got %d", len(e1))
 	}
 }
+
+func TestFactsRoundTripAndSupersede(t *testing.T) {
+	s := openTemp(t)
+	ctx := context.Background()
+
+	if err := s.PutFact(ctx, &Fact{EntityID: "e1", Kind: FactGTIN, Value: "09520123456788",
+		Confidence: 1, Source: SourceBarcode}); err != nil {
+		t.Fatal(err)
+	}
+	// Same fact observed again must not duplicate.
+	if err := s.PutFact(ctx, &Fact{EntityID: "e1", Kind: FactGTIN, Value: "09520123456788",
+		Confidence: 1, Source: SourceBarcode}); err != nil {
+		t.Fatal(err)
+	}
+	fs, _ := s.Facts(ctx, "e1", FactGTIN)
+	if len(fs) != 1 {
+		t.Fatalf("facts must be idempotent, got %d rows", len(fs))
+	}
+	if v, _ := s.FactValue(ctx, "e1", FactGTIN); v != "09520123456788" {
+		t.Fatalf("FactValue = %q", v)
+	}
+
+	// Highest confidence wins the single-value read.
+	_ = s.PutFact(ctx, &Fact{EntityID: "e1", Kind: FactProductType, Value: "guess", Confidence: 0.4, Source: SourceVision})
+	_ = s.PutFact(ctx, &Fact{EntityID: "e1", Kind: FactProductType, Value: "hose timer", Confidence: 1, Source: SourceUser})
+	if v, _ := s.FactValue(ctx, "e1", FactProductType); v != "hose timer" {
+		t.Fatalf("highest-confidence value should win, got %q", v)
+	}
+
+	// A correction supersedes and is never re-read.
+	if err := s.SupersedeFacts(ctx, "e1", FactProductType); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.FactValue(ctx, "e1", FactProductType); v != "" {
+		t.Fatalf("superseded facts must not be returned, got %q", v)
+	}
+	if v, _ := s.FactValue(ctx, "e1", FactGTIN); v == "" {
+		t.Fatal("superseding one kind must not affect another")
+	}
+	if v, _ := s.FactValue(ctx, "nobody", FactGTIN); v != "" {
+		t.Fatalf("missing fact should read empty, got %q", v)
+	}
+}

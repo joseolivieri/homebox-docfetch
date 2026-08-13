@@ -185,12 +185,28 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Local QR decode (no network): manufacturer-printed support links from
-	// the photos ride along to the confirm screen.
+	// Local code decode (no network): manufacturer-printed support links,
+	// GTINs and unit serials ride along to the confirm screen.
+	codes := decodeCodes(qrImages)
+	var qrURLs []string
+	var gtin, serial string
+	for _, c := range codes {
+		if c.Payload.Chaseable() {
+			qrURLs = append(qrURLs, c.Payload.URL)
+		}
+		if gtin == "" && c.Payload.GTIN != "" {
+			gtin = c.Payload.GTIN
+		}
+		if serial == "" && c.Payload.Serial != "" {
+			serial = c.Payload.Serial
+		}
+	}
 	resp := struct {
 		*llm.IntakeExtraction
 		QRUrls []string `json:"qrUrls"`
-	}{ex, decodeQRs(qrImages)}
+		GTIN   string   `json:"gtin,omitempty"`
+		Serial string   `json:"codeSerial,omitempty"`
+	}{ex, qrURLs, gtin, serial}
 
 	// Stateless: the client re-sends the photos with /api/create for attaching.
 	writeJSON(w, http.StatusOK, resp)

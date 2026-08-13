@@ -2,6 +2,7 @@ package portal
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -148,6 +149,30 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 			Kind: store.EvQRLink, URL: u, Detail: "label QR (intake)",
 		})
 	}
+	s.recordIntakeFacts(ctx, ent.ID, r)
+
+	// User-supplied links. Both reuse signal paths that already exist rather
+	// than inventing new machinery (plan §6.7):
+	//   product page -> a lead the qr stage resolves and harvests, exactly
+	//                   like a QR-scanned support page;
+	//   manual URL   -> doc.approve, the same claim as tapping Attach on a
+	//                   review prompt, so attachApproved fetches it as-is.
+	if u := strings.TrimSpace(r.FormValue("productUrl")); usableQRURL(u) {
+		_ = s.st.AppendEvent(ctx, &store.Event{
+			EntityID: ent.ID, EntityName: name, Actor: store.ActorUser,
+			Kind: store.EvLeadURL, URL: u, Detail: "product page (entered at intake)",
+		})
+		_ = s.st.PutFact(ctx, &store.Fact{
+			EntityID: ent.ID, Kind: store.FactLeadURL, Value: u,
+			Confidence: 1, Source: store.SourceUser,
+		})
+	}
+	if u := strings.TrimSpace(r.FormValue("manualUrl")); usableQRURL(u) {
+		_ = s.st.AppendEvent(ctx, &store.Event{
+			EntityID: ent.ID, EntityName: name, Actor: store.ActorUser,
+			Kind: store.EvDocApprove, URL: u, Detail: "manual URL supplied at intake",
+		})
+	}
 
 	// 3. Attach intake photos. The personal product photo becomes the primary
 	// image; the curation stage later fetches an official photo alongside it,
@@ -207,3 +232,48 @@ func truncate(s string, n int) string {
 }
 
 var _ = http.StatusOK
+
+// recordIntakeFacts persists what the confirm screen carried but Homebox has
+// no field for, plus the read confidences (plan §1.4/§6.6). Facts are durable
+// while photos are not: staged images age out, so anything not extracted here
+// is gone. Values the user saw and submitted count as human-confirmed.
+func (s *Server) recordIntakeFacts(ctx context.Context, entityID string, r *http.Request) {
+	put := func(kind, value, source string, conf float64) {
+		if value = strings.TrimSpace(value); value == "" {
+			return
+		}
+		if err := s.st.PutFact(ctx, &store.Fact{
+			EntityID: entityID, Kind: kind, Value: value,
+			Confidence: conf, Source: source,
+		}); err != nil {
+			log.Printf("portal: fact %s for %s: %v", kind, entityID, err)
+		}
+	}
+
+	// Identifiers decoded from codes — the keys future resolvers look up.
+	put(store.FactGTIN, r.FormValue("gtin"), store.SourceBarcode, 1)
+	put(store.FactUnitSerial, r.FormValue("codeSerial"), store.SourceBarcode, 1)
+	put(store.FactFCCID, r.FormValue("fccId"), store.SourceVision, 1)
+	// Product type: read off the label, and the category gate's best input —
+	// better than inferring a category from tags or the item name.
+	put(store.FactProductType, r.FormValue("productType"), store.SourceUser, 1)
+
+	// Per-field vision confidence. The model already reports how sure it was;
+	// discarding it meant a 0.62 model-number read was trusted like a 0.99.
+	for _, f := range []string{"manufacturer", "modelNumber", "serialNumber", "name"} {
+		raw := strings.TrimSpace(r.FormValue("conf_" + f))
+		if raw == "" {
+			continue
+		}
+		c, err := strconv.ParseFloat(raw, 64)
+		if err != nil || c <= 0 || c > 1 {
+			continue
+		}
+		// A field the user edited is theirs, not the model's.
+		src, conf := store.SourceVision, c
+		if r.FormValue("edited_"+f) == "1" {
+			src, conf = store.SourceUser, 1
+		}
+		put(store.FactFieldConf, f+"="+strconv.FormatFloat(conf, 'f', 2, 64), src, conf)
+	}
+}

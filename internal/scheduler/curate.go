@@ -109,7 +109,7 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 	if subject == "" {
 		return
 	}
-	category := categoryOf(detail)
+	category := s.categoryOf(ctx, detail)
 	rejected, _ := s.store.RejectedURLs(ctx, detail.ID, "photo")
 
 	// Stage 1: og:image from known official pages.
@@ -164,6 +164,20 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 		s.recordClass(ctx, detail, "photo", "notfound", "", conf)
 		return
 	}
+	// A7: "best of five" is not the same claim as "this is the product".
+	// The og:image path already verifies; the search path did not, which is
+	// how a generic stock photo attached at 0.90. One extra small vision call.
+	ok, vconf, err := s.vision.VerifyProductImage(ctx, s.visionModel, subject, category,
+		llm.IntakeImage{Data: cands[best].Data, Mime: cands[best].Mime})
+	if err != nil {
+		log.Printf("photo %s: winner verify: %v", detail.ID, err)
+		return
+	}
+	if !ok || vconf < s.cfg.PhotoMinConfidence {
+		log.Printf("photo %s: ranked winner failed verification (match=%v conf=%.2f) %s", detail.ID, ok, vconf, cands[best].Src)
+		s.recordClass(ctx, detail, "photo", "notfound", cands[best].Src, vconf)
+		return
+	}
 	s.attachPhoto(ctx, detail, cands[best], conf, "image-search")
 }
 
@@ -214,9 +228,19 @@ func (s *Scanner) officialPages(ctx context.Context, detail *homebox.EntityOut) 
 	return out
 }
 
-// categoryOf derives the product type from the item's tags (enrichment writes
-// the category as a tag). Machine/triage tags are skipped.
-func categoryOf(detail *homebox.EntityOut) string {
+// categoryOf derives the product type. The label's own product type (read at
+// intake, stored as a fact) beats guessing from tags — "hose timer" off the
+// sticker is more specific than any tag the user happened to apply.
+func (s *Scanner) categoryOf(ctx context.Context, detail *homebox.EntityOut) string {
+	if pt, _ := s.store.FactValue(ctx, detail.ID, store.FactProductType); pt != "" {
+		return pt
+	}
+	return categoryFromTags(detail)
+}
+
+// categoryFromTags is the fallback: enrichment writes the category as a tag.
+// Machine/triage tags are skipped.
+func categoryFromTags(detail *homebox.EntityOut) string {
 	for _, t := range detail.Tags {
 		if strings.Contains(t.Name, "/") { // docfetch/unverified, source/docfetch
 			continue
