@@ -590,10 +590,90 @@ verified until we see an actual code in the wild. The classifier's default
 branch handles unknown payloads safely regardless, which is the point of
 building a classifier rather than a vendor list.)*
 
-### 6.6 Sequencing for this section
+### 6.6 Where intake knowledge lives — a `facts` table, not an "AI store"
+
+Intake produces more signal than Homebox's schema can hold. Sorting it three
+ways is the right frame:
+
+| Class | Examples | Home |
+|---|---|---|
+| **Leads** — actionable for discovery | GTIN, FCC ID, Matter VID/PID, support URLs, brand-domain hints, retailer | **docfetch DB** (new `facts` table) |
+| **Metadata** — the user's inventory data | manufacturer, model, serial, purchase block, warranty | **Homebox** (schema fits — keep writing these) |
+| **Metadata Homebox can't hold** | product type, origin country, certification marks, per-field read confidence | **docfetch DB**, optionally surfaced as custom fields |
+| **Waste** — no value after processing | raw photo pixels once decoded, marketing copy, box art | staged, then TTL'd (§6.2) |
+
+#### Why not "AI-based storage"
+
+Pushing back on the framing: a vector/semantic store would be the wrong tool.
+This data is **small, structured, and queried by exact key** — "what is this
+entity's GTIN", "does it have an FCC ID". Hundreds of items, not millions.
+Embeddings buy fuzzy similarity we do not need and cost a dependency the
+zero-dependency-core rule (D28) exists to avoid — the same reasoning that
+already rejected Meilisearch and queues. SQLite with a typed key and a JSON
+value is the correct weight class.
+
+(The one future case that would genuinely earn embeddings is fuzzy identity
+matching — "is this doc about the same product as that item" without a model
+number. That is speculative; revisit only if the golden set shows it.)
+
+#### Why a table rather than more events
+
+The event log already carries free-text detail, and §6.3's `intake.observed`
+puts the per-photo data object there. That is right for **history** but wrong
+for **state**: discovery would have to scan and replay the log every pass to
+reconstruct "what do we know about this item" — which is exactly the mistake
+the notes bus made (parsing a log to recover state, D26). Events say *what
+happened*; facts say *what is currently true*.
+
+```sql
+CREATE TABLE facts (
+    entity_id   TEXT NOT NULL,
+    kind        TEXT NOT NULL,   -- gtin | fcc_id | matter_vid_pid | product_type
+                                 -- origin_country | cert_mark | support_url
+                                 -- field_confidence | retailer | …
+    value       TEXT NOT NULL,
+    confidence  REAL,
+    source      TEXT NOT NULL,   -- vision | qr | barcode | user | enrich | resolver
+    observed_at TIMESTAMP NOT NULL,
+    superseded  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (entity_id, kind, value)
+);
+```
+
+The shape deliberately mirrors the existing `enrichments` table (value +
+confidence + source + supersede), because that provenance model already works.
+Kept separate rather than merged because the lifecycles differ: an enrichment
+row must stay undo-able against a *Homebox field it wrote*; a fact is just
+knowledge docfetch holds.
+
+#### Rules that keep it from rotting
+
+- **Homebox stays the inventory source of truth.** Never mirror a Homebox field
+  into `facts` — that creates a sync problem with no owner. `facts` holds only
+  what Homebox cannot.
+- **Write once at observation, supersede on correction.** Same discipline as
+  enrichments; a user correction is final.
+- **Facts are durable, photos are not.** Photos TTL out of staging (§6.2), so a
+  fact is *not* re-derivable afterwards. That makes `facts` part of the precious
+  backed-up state (D26) — and is the reason to extract aggressively at intake
+  rather than planning to re-read photos later.
+- **Every fact should have a consumer.** A `kind` nothing reads is the
+  `productType` bug (§1.4) with extra steps. Add kinds when a stage will use
+  them, not speculatively.
+
+#### What this unlocks
+
+`facts` is the table the §7 resolvers query (`SELECT value FROM facts WHERE
+kind='gtin'`), the store R6's weak-identity gate reads confidence from, and the
+natural home for the `intake.observed` payload's structured half. It is a
+prerequisite for the resolver fast path being anything other than a one-shot
+at intake time.
+
+### 6.7 Sequencing for this section
 
 | # | Change | Cost |
 |---|---|---|
+| **A6d** | §6.6 `facts` table + write GTIN / FCC ID / product type / field confidence into it | ~0, one migration |
 | **A7** | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event — **prerequisite for §7's resolver fast path** | ~0 |
 | **A8** | QR payload classifier + GS1 AI parser (Digital Link / element string / Transparency SGTIN → GTIN + serial); stop chasing non-support payloads | ~0, ~50 lines |
 | **A8b** | Intermediary-host guard: never seed the brand cache from brand-protection resolver domains (latent poisoning bug, same class as the YouTube fix) | ~0 |
