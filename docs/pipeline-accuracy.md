@@ -304,6 +304,105 @@ strings prove insufficient — e.g. dense multi-label stickers where knowing
 *which* of four numbers was read still isn't clear from text alone. The
 evidence-string version should be built first and will likely settle it.
 
+## 6. Intake observations: more photos, staging, and a per-photo data object
+
+Three separable ideas. They are worth very different amounts.
+
+### 6.1 Arbitrary extra photos — trivial, do it
+
+The four slots are a **UI convention, not a server constraint**: `handleExtract`
+already QR-decodes every field in `r.MultipartForm.File` generically. Adding an
+"extra photos" affordance (N un-slotted images, decode-only) is a portal-UI
+change plus a decision about what happens to the bytes afterwards (§6.2).
+
+Worth distinguishing two kinds of photo, because it drives everything else:
+
+| Kind | Examples | Long-term value |
+|---|---|---|
+| **Evidence** | sticker, receipt, warranty panel, product shot | keep — re-readable, re-runnable against a better model, and the user's own record |
+| **Transport** | "there's another QR on the back", packaging panels | **none once decoded** — the payload is the value, the pixels are not |
+
+### 6.2 Staging storage — yes, but not for the stated reason
+
+The premise ("too many photos to keep permanently in Homebox") is only half
+right: transport photos shouldn't be *stored* at all, permanently or otherwise
+— they should be decoded and dropped. That alone needs zero new storage, since
+the client simply never re-sends them to `/api/create`.
+
+The **actual** case for an intake staging store is different, and it already
+applies today with four photos:
+
+1. **Double upload.** The flow is stateless: the client POSTs photos to
+   `/api/extract`, then POSTs *the same photos again* to `/api/create`. At 3–5MB
+   per phone photo that is 25–40MB re-uploaded per intake once extra shots
+   exist. Staging turns the second call into a list of IDs.
+2. **Bench corpus.** B0 (`bench-vision`) needs real sticker photos with
+   hand-checked expected values. Real intakes are exactly that corpus — but
+   only if the originals survive long enough to be exported.
+3. **Re-extraction.** Changing `llm.vision_model` should let a user re-read an
+   item's sticker without re-photographing it.
+
+Shape: `/data/intake/<session>/` on disk (**not** sqlite BLOBs — the state DB is
+declared precious and backed up; multi-MB photos do not belong in it), TTL
+swept by the existing reconcile job, `intake.staging_ttl: 24h`. Filesystem +
+TTL, no new dependency, no GC subtlety beyond "delete old directories".
+
+Only evidence photos then attach to Homebox on create; transport photos expire
+from staging having never been stored anywhere permanent.
+
+### 6.3 The per-photo data object — strongest idea here, but rank the signals
+
+An `intake.observed` event per photo, carrying everything mechanically
+extractable, fits the existing event model and directly serves the "show the
+human what was found" goal from §5.4. But the listed signals differ by an order
+of magnitude in value:
+
+| Signal | Cost | Value for doc-fetching | Verdict |
+|---|---|---|---|
+| **Barcode / GTIN** (UPC-A/E, EAN-8/13, Code128/39/93) | **zero new deps** — gozxing (already in go.mod) ships `oned.NewMultiFormatUPCEANReader`; same decode pass as QR | **highest** — a canonical, deterministic product identifier beats a fuzzily-OCR'd model number, and unlocks product-database lookup as a new identity source | **do first** |
+| **FCC ID** (e.g. `2AB3C-XYZ123`) | text; rides the vision call already being made | **high for electronics** — maps to the FCC's public filing database, whose filings frequently *include the manual and internal photos*. A document source, not just an identifier | do |
+| **Country of origin** ("Made in China") | text, same call | low–moderate — weak input to the region/market bias already in the backlog; says nothing about which market the *manual* targets | cheap, take it |
+| **Certification marks** (CE, UKCA, EAC, UL, RoHS/WEEE) | symbol recognition — the vision model must assert them | **lowest** — that an item bears CE tells the pipeline nearly nothing about where its manual lives. This is *inventory/compliance* metadata, not a discovery signal | nice-to-have; justify as an inventory feature, not an accuracy one |
+
+Two caveats so barcodes are not oversold:
+
+- A retail barcode identifies the **SKU/package**, which is not always the
+  model number — bundles, regional SKUs and retailer-specific packs diverge,
+  and the code may be on the *box* rather than the product. Treat GTIN as a
+  strong *additional* identity key, never a replacement for the model number.
+- Turning a GTIN into a product identity needs an **external product database**
+  (GS1, UPCitemdb, Open Product Data). That is a new curation source — which,
+  per the backlog rule, is the trigger for doing **provider standardization**
+  first.
+
+**Proposed shape** (matches §5.4's evidence direction):
+
+```json
+// intake.observed event, one per photo
+{ "slot": "extra-2",
+  "qr":      ["https://acme.example/support/wt41"],
+  "barcode": [{"format": "EAN13", "value": "0712345678901"}],
+  "text":    {"fccId": "2AB3C-XYZ", "originCountry": "Thailand"},
+  "marks":   ["CE", "UKCA"] }
+```
+
+Decode (QR + barcode) is deterministic and local — it stays inside the intake
+egress boundary. `text`/`marks` ride the existing vision call as extra schema
+fields, costing no additional request. The object renders on the confirm screen
+and in `/log`, which is the human visibility asked for in §5.4.
+
+### 6.4 Sequencing for this section
+
+| # | Change | Cost |
+|---|---|---|
+| **A7** | Barcode decode alongside QR (all photos, existing lib) + `intake.observed` event | ~0 |
+| **A8** | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
+| **B3** | Extra-photo UI + filesystem staging with TTL (kills double upload, feeds B0's corpus) | ~½ session |
+| **C2** | GTIN → product-database lookup as a curation provider (**provider standardization first**) | new source + interface work |
+| **C3** | Certification marks as inventory metadata (not accuracy) | prompt + fields |
+
+## 7. Accuracy backlog (beyond the above)
+
 - **Community/official maintenance resources** (plan M6): repair videos,
   simple-fix guides; non-promotional gating is the hard part. QR platform
   targets are already being recorded as raw material.
