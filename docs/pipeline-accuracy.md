@@ -669,7 +669,100 @@ natural home for the `intake.observed` payload's structured half. It is a
 prerequisite for the resolver fast path being anything other than a one-shot
 at intake time.
 
-### 6.7 Sequencing for this section
+### 6.7 Beyond photos: typed document intake
+
+**This section absorbs three previously separate items** — P4 (drop-a-PDF), P5
+(text description) and the reshaped email ingest (review M3) — into one
+feature. It reduces the plan's item count rather than adding to it.
+
+#### The reframe
+
+The product goal is *"never hand-type product information again"*. Photos are
+one input channel toward that goal — the fastest to capture, and **the lossiest
+to read**. A camera introduces glare, angle, focus, worn labels, and
+serial-vs-model ambiguity. Other channels the user often already has are
+structured text with none of those failure modes.
+
+Ranking input channels by extraction fidelity — the opposite order from how the
+product currently prioritizes them:
+
+| Channel | Fidelity | Notes |
+|---|---|---|
+| **PDF manual** (user has it locally) | **definitive** | the document *is* the answer — discovery is finished for that class before it starts |
+| **`.eml` order confirmation** | near-exact | structured; carries retailer SKU and often the **product URL**, which is a better lead than a model number |
+| **PDF invoice/receipt** | high | real text, no OCR ambiguity, exact date and price |
+| **Pasted text** (order email body, spec blurb) | high | zero file handling; literally the copy-paste this product replaces |
+| **Pasted product URL** | high | a lead, not a document — recorded like `qr.link`, fetched by *curation* (no intake egress) |
+| Photo of model sticker | moderate | current primary path; OCR ambiguity is why §1.2's `confidence` matters |
+| Photo of product only | low | identity inferred from appearance |
+
+Photo intake stays the fast path for an item in your hands. It should stop
+being the *only* path.
+
+#### Shape
+
+Generalize the four fixed photo slots into **typed attachments**: the user
+picks what a file is (manual / receipt / warranty / product photo / other), and
+a router sends it to the right extractor:
+
+| Input | Extractor | Result |
+|---|---|---|
+| image/* | vision model + QR/barcode decode | identity, purchase, warranty, codes |
+| application/pdf | text extraction (+ LLM read) | purchase/warranty fields; **or attach directly when the user says it is the manual** |
+| message/rfc822 (`.eml`) | header + body parse, walk attachments | retailer, order id, date, price, **product URL** |
+| text/plain (paste box) | LLM parse of one free-text blob | identity + purchase fields |
+| URL (paste field) | none at intake — recorded as a lead | curation fetches it (boundary preserved) |
+
+Homebox's attachment enum maps cleanly, so nothing new is needed on that side:
+manual → `manual`, invoice → `receipt`, warranty doc → `warranty`, photos →
+`photo`, anything else → `attachment`.
+
+#### Why this is the highest-value intake work
+
+- **A dropped manual short-circuits the entire pipeline.** No search, no
+  rerank, no skim, no review gate — the same collapse §7's resolvers achieve,
+  available today with no external dependency. `hasDoc()` + `skip_if_exists`
+  already make the scanner skip a class that is present, so this works with the
+  existing gates.
+- **It seeds the golden set with ground truth** (B0/B1). Every user-supplied
+  manual is a labeled example, which is the measurement gap's cheapest input.
+- **It answers the cases photos cannot** (review P8): installed appliances,
+  worn labels, items long out of packaging. The user may not be able to
+  photograph the label, but they can often paste the order email.
+- **It is honest about doubt.** A dropped PDF or pasted receipt should record
+  higher field confidence than a vision read — which, once §1.4's confidence
+  wiring lands, means the weak-identity gate (R6) automatically trusts these
+  paths more.
+
+#### Constraints — do not build a document manager
+
+- **Typed by the user first, auto-classified later.** If the user says "this is
+  the manual", no extraction is needed to attach it. Ship the typed drop; add
+  content-based classification only if the untyped case proves common.
+- **Strict allowlist and size caps.** Accept only the types above; reject the
+  rest. Untrusted-format parsing is where the crash and injection surface
+  lives, and the built-in PDF reader already panics on malformed files
+  (`verify.go:130`).
+- **Same rule as S11:** content extracted from a user-supplied document is
+  *evidence, never instruction*. A PDF may not introduce a URL that docfetch
+  then fetches without the user confirming it on the confirm screen.
+- **Keep only what Homebox has a home for.** A `.eml` is parsed and dropped
+  (staging TTL, §6.2); its extracted facts persist (§6.6). Manuals, receipts
+  and warranty docs attach; everything else is waste.
+- **This raises B2's value.** PDF handling moves from "verification nicety" to
+  a primary intake path, which strengthens the case for a real text extractor.
+
+#### Sequencing
+
+| # | Change | Cost |
+|---|---|---|
+| **A10** | Paste box (text) + pasted product URL as a lead — no file handling at all | ~0 |
+| **A11** | Typed PDF drop; user-declared class; attach manual/receipt/warranty directly | small |
+| **B7** | PDF text read for purchase/warranty fields (rides B2's extractor) | small after B2 |
+| **B8** | `.eml` drop — parse order confirmations, harvest product URL | ~½ session |
+| — | Content-based auto-classification of dropped files | only if needed |
+
+### 6.8 Sequencing for this section
 
 | # | Change | Cost |
 |---|---|---|

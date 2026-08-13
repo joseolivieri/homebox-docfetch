@@ -302,6 +302,9 @@ exactly like P4's file drop) rather than watching a mailbox. Same data, no
 credentials, no polling, no unsolicited attacker input. If mailbox watching
 ever happens it belongs in a separate opt-in module with its own threat model.
 
+*(Resolved: `pipeline-accuracy.md` §6.7 adopts exactly this shape, folding P4,
+P5 and this reshaped ingest into a single typed-document intake feature.)*
+
 ### M4 · Part 2 over-promises the barcode fast path
 
 P2 says "scan barcode, done". §7 says resolver coverage is thin today. Both are
@@ -363,7 +366,7 @@ database, the deployment model, or the LLM strategy.
 | 3 | **Tier A** (A1–A8b, minus A9) | free accuracy work already specified |
 | 4 | **S3, S4** spend guard + portal auth defaults | public-release blockers |
 | 5 | **S6, S10, S12** migrations, config minimization, published expectations | public-release blockers |
-| 6 | **P4** drop-a-PDF | smallest item with best value; seeds the golden set |
+| 6 | **§6.7 typed document intake** (A10/A11 first) | absorbs P4 + P5 + reshaped M3 into one feature; a dropped manual short-circuits the whole pipeline and seeds the golden set |
 | 7 | **B1/B2** replay harness, then extraction | measured, in that order |
 | 8 | **§7 resolvers** (B4–B6) | highest ceiling, after identifiers land |
 | 9 | Everything else | re-plan after 1–8 |
