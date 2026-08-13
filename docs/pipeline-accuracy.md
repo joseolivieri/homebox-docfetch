@@ -9,20 +9,117 @@ what to change — ranked by value per unit of cost, no new hardware assumed.
 
 ## 1. The pipeline as it stands
 
-### 1.1 Intake (portal, `internal/portal`) — no web egress
+The system has exactly **two stages** (D20), separated by a hard egress
+boundary enforced at the package level:
+
+| # | Name | Package | Egress | Owns |
+|---|---|---|---|---|
+| 1 | **Intake** | `internal/portal` | **vision model only** — no web searching, no downloads | reading photos, decoding codes, creating the entity |
+| 2 | **Curation** | `internal/scheduler` + `internal/discovery` | **all web egress** | enrichment, document discovery, verification, photos, warranty |
+
+They run in one process (`serve`, D25) and communicate through the **shared
+SQLite event store** (D26) plus the Homebox entity itself. `internal/portal`
+importing any discovery/egress code is the invariant that keeps the intake
+stage ready for a local/offline vision model.
+
+### 1.1 Stage 1 — intake
 
 ```
-photos ──┬─▶ vision model (sticker/receipt/warranty)  → manufacturer, model, serial,
-         │                                              purchase block, warranty terms
-         └─▶ local QR decode (EVERY photo, gozxing)   → qr.link signal events
+photos ──┬─▶ vision model (sticker/receipt/warranty)  → IntakeExtraction (§1.2)
+         │
+         └─▶ local decode, EVERY photo (gozxing)      → qr.link signal events
                                                         (platform targets kept as
                                                          provenance only)
+                          │
+                    confirm screen (human edits every field)
                           │
                           ▼
               entity created in Homebox + events written + scanner triggered
 ```
 
-### 1.2 Curation (scanner, `internal/scheduler` + `internal/discovery`) — all egress
+The human confirm step is load-bearing: the vision model proposes, the person
+holding the object disposes. Everything downstream trusts these values.
+
+### 1.2 The vision intake object
+
+What the vision model returns (`llm.IntakeExtraction`), plus the locally
+decoded codes the handler adds. A realistic block for a water timer whose
+sticker was photographed along with the product:
+
+```json
+{
+  "sticker": {
+    "manufacturer": "Acme",
+    "modelNumber":  "WT41",
+    "serialNumber": "F82304891",
+    "productType":  "hose timer"
+  },
+  "receipt": {
+    "purchaseFrom":  "Home Depot",
+    "purchaseDate":  "2026-05-02",
+    "purchasePrice": 24.98,
+    "nameHint":      "ACME 2-Zone Hose Timer"
+  },
+  "warranty": {
+    "durationMonths": 24,
+    "claimsUrl":      "https://acme.example/warranty",
+    "details":        "2-year limited warranty against defects"
+  },
+  "name": "Acme WT41 Low Pressure Water Timer",
+  "confidence": {
+    "manufacturer": 0.95,
+    "modelNumber":  0.62,
+    "serialNumber": 0.88,
+    "name":         0.90
+  },
+  "qrUrls": ["https://www.youtube.com/@AcmeTimers"]
+}
+```
+
+Blocks the model could not see come back zero-valued — a product-only intake
+returns empty `sticker`/`receipt`/`warranty` and just a `name` guess.
+
+### 1.3 What actually crosses into the reasoning stage
+
+This is the part worth being precise about, because it is **much narrower than
+the extraction**. The JSON above never reaches curation. It populates Homebox
+entity fields and the confirm screen; curation then reads the *entity* back and
+builds its reasoning input:
+
+```go
+discovery.Item{
+    Manufacturer: "Acme",                              // ← sticker.manufacturer
+    ModelNumber:  "WT41",                              // ← sticker.modelNumber
+    Name:         "Acme WT41 Low Pressure Water Timer",// ← name
+    HintURLs:     []string{"https://…"},               // ← qr.link EVENTS, not the entity
+}
+```
+
+Four fields. That struct — plus the doc class being fetched — is the entire
+input to query construction, candidate scoring, model-match gating,
+`skimPromote`, the photo subject, and the warranty subject.
+
+### 1.4 Information dropped at the boundary (two real gaps)
+
+Comparing §1.2 with §1.3 surfaces two signals that are produced and then
+thrown away:
+
+- **`confidence` is discarded entirely** — never persisted, never shown to the
+  user, never gates anything (`grep Confidence internal/portal/intake.go`
+  returns nothing). The model tells us it read `modelNumber` at 0.62 and we
+  treat that identically to 0.99. This is *precisely* the signal **R6**
+  (weak-identity cap) needs, already being generated at no extra cost. It is
+  also half of §5.4's evidence display.
+- **`sticker.productType` is dead data** — extracted by the prompt, written to
+  no field, read by no code. Yet `categoryMatch()` (the per-class category
+  gate) and `categoryOf()` (the photo subject's category) both currently guess
+  the product category from tags and the item *name*. "hose timer" straight
+  from the label is better than either.
+
+Neither is a new feature — both are wiring up data the pipeline already pays
+for.
+
+### 1.5 Stage 2 — curation
 
 ```
 per entity (inflight-guarded, one goroutine per item)
@@ -53,7 +150,11 @@ per entity (inflight-guarded, one goroutine per item)
                  warranty estimate, tagging, breadcrumb, events
 ```
 
-### 1.3 Feedback that already exists
+Note the asymmetry between the stages' LLM use: intake makes **one** vision
+call per item; curation makes **many** small text calls per scan (rerank, skim,
+warranty). §5.2 covers why that matters for model selection.
+
+### 1.6 Feedback that already exists
 
 - **Per-URL negative memory**: ntfy Reject, or deleting the artifact in Homebox
   (sweep) → `doc.reject` signal event, permanent, filtered from every future pass.
@@ -191,6 +292,8 @@ image, and we will know whether extraction failure is a 5% or a 40% problem.
 | **A4** | R6 weak-identity cap (no auto-attach without model evidence) | ~0 | low | ships now |
 | **A5** | R7 verify the image-search photo winner | 1 vision call/photo | low | ships now |
 | **A6** | §5.4 verbatim evidence strings per extracted field + confirm-screen hints | prompt/schema only | none | ships now |
+| **A6b** | §1.4 persist the vision `confidence` map and feed it to R6's weak-identity gate (currently discarded) | ~0 | none | ships now |
+| **A6c** | §1.4 wire `sticker.productType` into the category gate and photo subject (currently dead data) | ~0 | low | ships now |
 | **B0** | §5.3 `bench-vision` harness + vision-model bake-off | ~½ session | none (offline) | before B1 |
 | **B1** | R5 golden-set replay harness (learning Phase B) | ~1 session | none (offline) | before B2 |
 | **B2** | R1 `pdftotext` optional extractor + image base change | image +40–60MB, dev dep, D-row | medium | after A2 data + B1 baseline |
