@@ -120,6 +120,19 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		upd.Fields = homebox.UpsertField(upd.Fields, "Support (QR)", notes.MDLink("qr", qrURLs[0]))
 	}
 
+	// Identifiers decoded from the label go on the item itself, not only into
+	// the facts table: a GTIN or FCC ID is something the owner searches and
+	// reads, and Homebox can only do that with a real field. The rest of the
+	// facts (confidences, lead URLs) stay internal — they belong next to the
+	// events that produced them, on the activity log.
+	for _, f := range []struct{ label, key string }{
+		{"GTIN", "gtin"}, {"FCC ID", "fccId"}, {"Unit serial", "codeSerial"},
+	} {
+		if v := strings.TrimSpace(r.FormValue(f.key)); v != "" {
+			upd.Fields = homebox.UpsertField(upd.Fields, f.label, v)
+		}
+	}
+
 	// Intake provenance is events now (M2/D26); notes carry one breadcrumb line.
 	var got []string
 	for _, f := range []string{"sticker", "receipt", "product", "warranty"} {

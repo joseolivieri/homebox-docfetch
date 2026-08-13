@@ -146,14 +146,25 @@ type Docs struct {
 // a single slot. Classification is by keyword match on the candidate's
 // url/title/snippet; category gating limits a class to relevant item types.
 type DocClass struct {
-	Name       string   `yaml:"name"`       // ledger doc_class + notes verb ("manual", "parts")
-	Field      string   `yaml:"field"`      // custom-field label ("Manual" -> "Manual"/"Manual (web)")
-	AttachAs   string   `yaml:"attach_as"`  // Homebox attachment type (manual|attachment|warranty)
+	Name  string `yaml:"name"`  // ledger doc_class + notes verb ("manual", "parts")
+	Field string `yaml:"field"` // custom-field label ("Manual" -> "Manual"/"Manual (web)")
+	// Kind selects what satisfying the class means. "file" (the default)
+	// downloads, content-verifies and attaches a document. "link" records an
+	// official URL in the field and nothing else — for artifacts that only
+	// exist as web pages (a product page, a downloads/firmware index, a
+	// techspecs page). Much of modern hardware publishes no PDF at all, and
+	// forcing those into the file path is what makes the pipeline settle for a
+	// third-party rehost.
+	Kind       string   `yaml:"kind"`
+	AttachAs   string   `yaml:"attach_as"`  // Homebox attachment type (manual|attachment|warranty); file classes only
 	Keywords   []string `yaml:"keywords"`   // classify + page-follow harvest keep-set + query hints
 	Queries    []string `yaml:"queries"`    // {subject} search templates for the web stages
 	Categories []string `yaml:"categories"` // only fetch for items whose tags match one of these; empty = all
 	Enabled    bool     `yaml:"enabled"`
 }
+
+// KindLink is the DocClass.Kind value for a URL-only class.
+const KindLink = "link"
 
 // DocsEnabled resolves the docs provider toggle (default true).
 func (c *Config) DocsEnabled() bool {
@@ -185,6 +196,27 @@ func defaultDocClasses() []DocClass {
 			Name: "datasheet", Field: "Datasheet", AttachAs: "attachment", Enabled: false,
 			Keywords: []string{"datasheet", "data sheet", "specification", "spec sheet", "technical data"},
 			Queries:  []string{"{subject} datasheet filetype:pdf"},
+		},
+		// Link classes: the artifact IS a URL. No download, no skim, no
+		// attachment — only an official page matched to this model is accepted,
+		// which is also the one thing a third-party copy cannot forge.
+		{
+			Name: "product", Field: "Product page", Kind: KindLink, Enabled: true,
+			Keywords: []string{"product", "products", "shop", "store", "buy", "overview", "techspecs", "tech-specs"},
+			Queries:  []string{"{subject} official product page"},
+		},
+		{
+			Name: "specs", Field: "Specs", Kind: KindLink, Enabled: true,
+			Keywords: []string{"techspecs", "tech specs", "specifications", "specs", "datasheet", "technical data"},
+			Queries:  []string{"{subject} specifications"},
+		},
+		// Firmware/driver indexes matter for anything with software in it, and
+		// are the page you actually return to years later.
+		{
+			Name: "downloads", Field: "Downloads", Kind: KindLink, Enabled: true,
+			Keywords:   []string{"download", "downloads", "firmware", "driver", "drivers", "software", "support/downloads"},
+			Queries:    []string{"{subject} firmware download", "{subject} drivers download"},
+			Categories: []string{"network", "networking", "switch", "router", "access point", "modem", "nas", "server", "computer", "laptop", "desktop", "pc", "motherboard", "gpu", "printer", "nvr", "camera", "smart home", "electronics"},
 		},
 	}
 }

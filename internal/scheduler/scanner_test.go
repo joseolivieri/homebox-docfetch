@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,12 +17,13 @@ import (
 // --- fakes ---
 
 type fakeAPI struct {
-	list     []homebox.EntitySummary
-	details  map[string]*homebox.EntityOut
-	uploads  int
-	patches  int
-	puts     int
-	lastTags []string
+	list       []homebox.EntitySummary
+	details    map[string]*homebox.EntityOut
+	uploads    int
+	patches    int
+	puts       int
+	lastTags   []string
+	lastFields []homebox.EntityField
 }
 
 func (f *fakeAPI) ListEntities(_ context.Context, page, pageSize int, tagIDs []string) (*homebox.EntityListResult, error) {
@@ -41,7 +43,9 @@ func (f *fakeAPI) PatchEntity(_ context.Context, id string, in homebox.EntityUpd
 func (f *fakeAPI) PutEntity(_ context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error) {
 	f.puts++
 	f.lastTags = in.TagIDs
+	f.lastFields = in.Fields
 	d := f.details[id]
+	d.Fields = in.Fields // PUT is full-replace; keep the fake faithful to that
 	if in.Manufacturer != nil {
 		d.Manufacturer = *in.Manufacturer
 	}
@@ -62,7 +66,11 @@ func (f *fakeAPI) EnsureTag(_ context.Context, name string) (string, error) {
 }
 
 type fakeDisc struct {
-	res         *discovery.Result
+	res *discovery.Result
+	// byClass mirrors the real engine, which partitions the candidate pool by
+	// class keywords: a product page does not land in the manual class's pool.
+	// Falls back to res when a class has no entry.
+	byClass     map[string]*discovery.Result
 	body        []byte
 	discCalls   int
 	skimConfirm bool // Skim reports the model confirmed in document text
@@ -73,7 +81,10 @@ func (d *fakeDisc) Discover(_ context.Context, _ discovery.Item, _ []string) (*d
 	d.discCalls++
 	return d.res, nil
 }
-func (d *fakeDisc) SelectClass(_ context.Context, _ discovery.Item, _ []discovery.Candidate, _ string) *discovery.Result {
+func (d *fakeDisc) SelectClass(_ context.Context, _ discovery.Item, _ []discovery.Candidate, class string) *discovery.Result {
+	if r, ok := d.byClass[class]; ok {
+		return r
+	}
 	if d.res == nil {
 		return &discovery.Result{}
 	}
@@ -99,6 +110,10 @@ func (n *fakeNtfy) Send(_ context.Context, _ notify.Message) error { n.sent++; r
 // --- helpers ---
 
 func newTestScanner(t *testing.T, api *fakeAPI, disc *fakeDisc, nt *fakeNtfy) (*Scanner, *store.Store) {
+	return newTestScannerWithClasses(t, api, disc, nt)
+}
+
+func newTestScannerWithClasses(t *testing.T, api *fakeAPI, disc *fakeDisc, nt *fakeNtfy, classes ...DocClassCfg) (*Scanner, *store.Store) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +124,7 @@ func newTestScanner(t *testing.T, api *fakeAPI, disc *fakeDisc, nt *fakeNtfy) (*
 		SkipIfExists:        true,
 		MaxPDFBytes:         10_000_000,
 		UnverifiedTag:       "docfetch/unverified",
+		DocClasses:          classes,
 	})
 	return sc, st
 }
@@ -527,6 +543,133 @@ func TestUnreadableNonOfficialReviewGates(t *testing.T) {
 	}
 	if !sawUnreadable {
 		t.Fatal("expected a skim.unreadable event recording why verification failed")
+	}
+}
+
+func TestLinkClassRecordsOfficialPage(t *testing.T) {
+	// A link class is satisfied by a URL: the field is written, nothing is
+	// downloaded, nothing is attached.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{},
+		byClass: map[string]*discovery.Result{"product": {
+			Candidates: []discovery.Candidate{
+				{URL: "http://shop.example/wt41x9", ModelMatch: true, IsHTML: true, Score: 9},
+				{URL: "http://acme.example/products/wt41x9", Official: true, IsHTML: true, ModelMatch: true, Score: 2},
+			},
+		}},
+	}
+	sc, st := newTestScannerWithClasses(t, api, disc, &fakeNtfy{},
+		DocClassCfg{Name: "manual", Field: "Manual", AttachAs: "manual", Enabled: true},
+		DocClassCfg{Name: "product", Field: "Product page", Link: true, Enabled: true},
+	)
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatalf("a link class must not attach anything, uploads=%d", api.uploads)
+	}
+	got := homebox.FieldValue(api.lastFields, "Product page")
+	if !strings.Contains(got, "acme.example/products/wt41x9") {
+		t.Fatalf("expected the official product page in the field, got %q", got)
+	}
+}
+
+func TestLinkClassRejectsNonOfficial(t *testing.T) {
+	// The narrow gate is the point: a marketplace listing that mentions the
+	// model is exactly what must NOT land in the field.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{},
+		byClass: map[string]*discovery.Result{"product": {
+			Candidates: []discovery.Candidate{
+				{URL: "http://marketplace.example/itm/wt41x9", ModelMatch: true, IsHTML: true, Score: 9},
+			},
+		}},
+	}
+	sc, st := newTestScannerWithClasses(t, api, disc, &fakeNtfy{},
+		DocClassCfg{Name: "manual", Field: "Manual", AttachAs: "manual", Enabled: true},
+		DocClassCfg{Name: "product", Field: "Product page", Link: true, Enabled: true},
+	)
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := homebox.FieldValue(api.lastFields, "Product page"); got != "" {
+		t.Fatalf("non-official page must not be linked, got %q", got)
+	}
+}
+
+func TestOfficialPageBeatsThirdPartyPDF(t *testing.T) {
+	// A maker that ships no PDF leaves only third-party copies, and a copy of
+	// the RIGHT product skims clean — content verification cannot separate it
+	// from the real thing. Provenance can: link the maker's own page instead.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best: &discovery.Candidate{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true},
+			Candidates: []discovery.Candidate{
+				{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true, Score: 6},
+				{URL: "http://acme.example/products/wt41x9", Official: true, IsHTML: true, ModelMatch: true, Score: 1},
+			},
+			Confidence: 0.95,
+		},
+		body: []byte("%PDF-1.4 WT41X9 installation guide"), skimConfirm: true,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatalf("a third-party copy must not attach when the maker has a page, uploads=%d", api.uploads)
+	}
+	got := homebox.FieldValue(api.lastFields, "Manual (web)")
+	if !strings.Contains(got, "acme.example/products/wt41x9") {
+		t.Fatalf("expected the official page linked, got %q", got)
+	}
+}
+
+func TestOfficialPDFStillBeatsOfficialPage(t *testing.T) {
+	// The page preference is a fallback for makers that publish no file, not a
+	// change of format policy: an official PDF still wins outright.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best: &discovery.Candidate{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true},
+			Candidates: []discovery.Candidate{
+				{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true, Score: 6},
+				{URL: "http://acme.example/docs/d-102.pdf", Official: true, IsPDF: true, Score: 3},
+				{URL: "http://acme.example/products/wt41x9", Official: true, IsHTML: true, ModelMatch: true, Score: 1},
+			},
+			Confidence: 0.95,
+		},
+		body: []byte("%PDF-1.4 WT41X9 owner's manual"), skimConfirm: true,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("official PDF should attach, uploads=%d", api.uploads)
 	}
 }
 

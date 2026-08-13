@@ -53,6 +53,7 @@ func build(cfg *config.Config) (*deps, error) {
 		discClasses = append(discClasses, discovery.DocClass{Name: dc.Name, Keywords: dc.Keywords, Queries: dc.Queries})
 		schedClasses = append(schedClasses, scheduler.DocClassCfg{
 			Name: dc.Name, Field: dc.Field, AttachAs: dc.AttachAs,
+			Link:       dc.Kind == config.KindLink,
 			Categories: dc.Categories, Enabled: dc.Enabled,
 		})
 	}
