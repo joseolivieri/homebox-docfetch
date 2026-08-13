@@ -27,6 +27,8 @@ collections are reset, not migrated. See `docs/plan-architecture-v2.md`.
    design decision is made**; that file is the design memory.
 3. `docs/how-it-works.md` — plain-language pipeline walkthrough.
    `docs/pipeline-accuracy.md` — where the decision pipeline is weak + ranked fixes.
+   `docs/architecture-review.md` — systems + product review of that plan, with the
+   consolidated priority order (start there before picking up accuracy work).
 4. Phase boards: `docs/phase-1-scheduler.md`, `docs/phase-1.5-enrich.md`, `docs/phase-2-portal.md`.
 
 ## Hard-won API/runtime facts (violations caused real bugs)
