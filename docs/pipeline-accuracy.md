@@ -443,12 +443,57 @@ GTIN) ≫ Matter codes ≫ Transparency alphanumeric (record only) — and the
 classifier itself pays for its keep immediately by stopping the pipeline from
 chasing payloads it should not.
 
-### 6.5 Sequencing for this section
+### 6.5 Brand-protection code vendors (Scantrust, Securikett, NanoMatrix, …)
+
+Surveyed because they issue a large share of the serialized codes appearing on
+consumer goods. **Conclusion: integrate none of them individually.** They share
+Amazon Transparency's shape and therefore its verdict:
+
+- unit-level serialization for **anti-counterfeiting**, which is not docfetch's
+  problem;
+- a **covert security layer** (NanoMatrix's overt/covert `TrackMatriX Lock`
+  layers, Scantrust's copy-detection patterns) that requires the vendor's own
+  SDK *and* a high-resolution scan of the physical code — unusable and
+  pointless for a downstream owner cataloguing an item they already possess;
+- a **consumer content layer** behind a vendor-hosted resolver, whose APIs are
+  brand-owner-gated exactly like Transparency's.
+
+**The good news: the useful part already works.** These codes almost always
+encode a *URL* to the vendor's resolver, which redirects to brand content. That
+is our existing support-URL path — `resolveQR` already follows redirects and
+`pdfLinksFrom` already harvests the destination's PDFs. No new code needed for
+the common case.
+
+**The one real gap is a latent bug.** `seedBrandCache` records
+`rootDomain(finalURL)` as the manufacturer's domain. If a redirect terminates
+on the *vendor's* host, docfetch would cache `Acme → scantrust.io` — the same
+brand-cache poisoning already fixed for YouTube (§6.4 platform handling). These
+hosts need the same treatment: **chase and follow, never seed the brand cache
+from them**, and only accept a post-redirect domain as the brand domain when it
+is not a known intermediary.
+
+**The strategic point — and it validates §7.** This vendor space is converging
+on GS1: Scantrust is a GS1-certified partner whose product generates **GS1
+Digital Link** QR codes, and NanoMatrix builds its covert layers on top of a
+GS1 Digital Link URL. So **integrate the standard, not the vendors** — the GS1
+Application Identifier parser (A8) and the Digital Link resolver (C5) pick up
+Scantrust-, NanoMatrix- and Transparency-issued codes as a side effect, with no
+vendor-specific code and no commercial relationship. That is the whole argument
+for §7's sequencing in one example.
+
+*(Swapt: no reliable information found in review — it appears to sit in the
+same "connected packaging" category, but nothing here should be treated as
+verified until we see an actual code in the wild. The classifier's default
+branch handles unknown payloads safely regardless, which is the point of
+building a classifier rather than a vendor list.)*
+
+### 6.6 Sequencing for this section
 
 | # | Change | Cost |
 |---|---|---|
 | **A7** | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event — **prerequisite for §7's resolver fast path** | ~0 |
 | **A8** | QR payload classifier + GS1 AI parser (Digital Link / element string / Transparency SGTIN → GTIN + serial); stop chasing non-support payloads | ~0, ~50 lines |
+| **A8b** | Intermediary-host guard: never seed the brand cache from brand-protection resolver domains (latent poisoning bug, same class as the YouTube fix) | ~0 |
 | **A9** | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
 | **B3** | Extra-photo UI + filesystem staging with TTL (kills double upload, feeds B0's corpus) | ~½ session |
 | **C2** | GTIN/FCC/Matter → **resolver** lookups — see §7, which supersedes this row | new source + interface work |
