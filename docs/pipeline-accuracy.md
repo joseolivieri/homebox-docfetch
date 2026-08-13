@@ -391,15 +391,69 @@ egress boundary. `text`/`marks` ride the existing vision call as extra schema
 fields, costing no additional request. The object renders on the confirm screen
 and in `/log`, which is the human visibility asked for in §5.4.
 
-### 6.4 Sequencing for this section
+### 6.4 Standardized 2D codes — classify the payload, don't special-case the brand
+
+Today `usableQRURL` is a URL blocklist: http(s) links pass and get chased,
+everything else is silently dropped. That is wrong in both directions once
+standardized codes are in play — some non-URL payloads carry *identity*, and
+some URL payloads must **not** be chased.
+
+The right primitive is a **payload classifier**: one pure function, no new
+dependency, that types each decoded code and routes it.
+
+| Payload type | Example | Action |
+|---|---|---|
+| **GS1 Digital Link** | `https://id.gs1.org/01/09520123456788/21/1234` | parse AIs → **GTIN** (identity) + serial; optionally also chase the URL (it is designed to resolve to product info) |
+| **GS1 element string** (DataMatrix, industrial/medical) | `(01)09520123456788(21)ABC123` | same parser → GTIN + serial |
+| **Amazon Transparency — GTIN form** | SGTIN: AI 01 + AI 21 | **same parser** → GTIN + unit serial. Real identity signal |
+| **Amazon Transparency — alphanumeric form** | `AZ…`/`ZA…` + 26 chars | opaque unit auth token → record, **never chase** |
+| **Matter setup code** (smart home) | `MT:Y.K9042C00KA0648G00` | vendor ID + product ID → identity for CSA-certified devices |
+| **Support URL** | `https://acme.com/support/wt41` | chase (current behavior) |
+| **Platform page** | maker's YouTube channel | provenance only (already implemented) |
+| **Non-web** | `WIFI:`, `mailto:`, `tel:` | drop (current behavior) |
+
+**The key design point:** do not build "Amazon Transparency support". Build a
+**GS1 Application Identifier parser** — and Transparency's GTIN form, GS1
+Digital Link, and GS1 DataMatrix all fall out of the same ~50 lines. That
+parser is also what makes the pipeline ready for **Sunrise 2027**, the GS1
+migration of retail POS from 1D barcodes to 2D Digital Link QR codes, which
+will put a GTIN-bearing QR on a large share of retail packaging.
+
+Notes that change the implementation:
+
+- **Transparency codes are DataMatrix, not QR.** gozxing ships a
+  `datamatrix` reader (already vendored) — enabling it is a few lines in the
+  decode pass, and it also picks up the industrial/medical DataMatrix labels
+  that carry GS1 element strings.
+- **Unit-unique serials populate a real field.** A Transparency/SGTIN serial
+  is per-unit — that maps directly onto Homebox's `serialNumber`, which the
+  sticker OCR often misses or misreads. Concrete accuracy win, no LLM.
+- **Never send an auth token to a third party.** A unit-unique code is a
+  tracking identifier; chasing it as a URL or putting it in a search query
+  would leak it to a search engine for zero benefit. Classify-and-hold is both
+  the correct and the privacy-preserving behavior.
+- **EU Digital Product Passport** (ESPR, phasing in from 2027 for batteries and
+  textiles) is the forward-looking case worth designing for but not building
+  yet: a mandated per-product QR resolving to repair, spare-parts and
+  documentation data — i.e. exactly docfetch's target, handed over by
+  regulation. The classifier is the seam where it will plug in.
+
+Value ordering: GS1 AI parser (covers Digital Link + DataMatrix + Transparency
+GTIN) ≫ Matter codes ≫ Transparency alphanumeric (record only) — and the
+classifier itself pays for its keep immediately by stopping the pipeline from
+chasing payloads it should not.
+
+### 6.5 Sequencing for this section
 
 | # | Change | Cost |
 |---|---|---|
-| **A7** | Barcode decode alongside QR (all photos, existing lib) + `intake.observed` event | ~0 |
-| **A8** | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
+| **A7** | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event | ~0 |
+| **A8** | QR payload classifier + GS1 AI parser (Digital Link / element string / Transparency SGTIN → GTIN + serial); stop chasing non-support payloads | ~0, ~50 lines |
+| **A9** | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
 | **B3** | Extra-photo UI + filesystem staging with TTL (kills double upload, feeds B0's corpus) | ~½ session |
 | **C2** | GTIN → product-database lookup as a curation provider (**provider standardization first**) | new source + interface work |
-| **C3** | Certification marks as inventory metadata (not accuracy) | prompt + fields |
+| **C3** | Matter setup-code parsing (vendor/product ID) + certification marks as inventory metadata | prompt + fields |
+| **C4** | EU Digital Product Passport resolution — design the seam now, build when codes appear | future |
 
 ## 7. Accuracy backlog (beyond the above)
 
