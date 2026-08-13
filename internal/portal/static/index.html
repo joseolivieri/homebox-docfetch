@@ -18,18 +18,41 @@
   /* App shell: one screen at a time. Screen = scrollable body + action bar
      pinned to the bottom (portrait) or a right-hand rail (phone landscape). */
   .screen { display: none; }
-  .screen.active { display: flex; flex-direction: column; height: 100dvh; }
+  /* padding-top clears the notch/status bar: the PWA is display:standalone with
+     a translucent status bar and viewport-fit=cover, so the viewport starts at
+     the physical top of the screen and the first row would sit under it. */
+  .screen.active { display: flex; flex-direction: column; height: 100dvh;
+    padding-top: env(safe-area-inset-top); }
   .sbody { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
     padding: 12px 16px 16px; width: 100%; max-width: 520px; margin: 0 auto; }
   .actions { flex: none; width: 100%; max-width: 520px; margin: 0 auto;
     padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
     background: #111318; border-top: 1px solid #1f232e;
-    display: flex; flex-direction: column; gap: 10px; }
+    display: flex; flex-direction: column; gap: 8px; }
+  /* Both actions on one row: secondary left, primary right. */
+  .btnrow { display: flex; gap: 10px; }
+  /* The primary action takes the leftover width so its label survives on a
+     narrow phone; the secondary sizes to its own text. */
+  .btnrow .btn { width: auto; min-width: 0; }
+  .btnrow .btn.primary { flex: 1 1 auto; }
+  .btnrow .btn.secondary { flex: 0 1 auto; }
 
   h1 { font-size: 1.05rem; margin: 6px 0 12px; }
   .card { background: #1b1e26; border-radius: 12px; padding: 16px; }
   label { display: block; font-size: .8rem; color: #9aa0ab; margin: 10px 0 4px; }
   input, select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2c3140; background: #12141a; color: #e6e6e9; font-size: 1rem; }
+  /* One fixed height for every text-ish control. iOS gives date/number inputs
+     their own intrinsic box, so without this the date field is visibly taller
+     than its row partner. Checkboxes keep their native box. */
+  input:not([type="checkbox"]), select { height: 42px; min-width: 0; }
+  /* iOS date input: strip the native chrome, kill the inner value element's
+     margin, and stop it claiming intrinsic width (which pushed it over the
+     price field's left edge inside the 1fr grid column). */
+  input[type="date"] { -webkit-appearance: none; appearance: none; }
+  input[type="date"]::-webkit-date-and-time-value { margin: 0; text-align: left; }
+  input[type="date"]::-webkit-calendar-picker-indicator { margin: 0; padding: 0; }
+  /* Placeholders are examples, not values — must not read as filled-in text. */
+  ::placeholder { color: #575c69; opacity: 1; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .capbtn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
     width:100%; aspect-ratio: 1; border-radius: 12px; border: 2px dashed #2c3140; background:#12141a;
@@ -41,8 +64,12 @@
   .capbtn.filled { border-style: solid; border-color:#3d7eff; }
   .capbtn.filled .tag { display:block; }
 
-  .btn { display:block; width:100%; padding:13px; border:0; border-radius:10px;
-    font-size:1rem; font-weight:600; cursor:pointer; text-align:center; text-decoration:none; }
+  .btn { display:flex; align-items:center; justify-content:center; gap:6px;
+    width:100%; padding:13px 10px; border:0; border-radius:10px; font-family:inherit;
+    font-size:.95rem; font-weight:600; cursor:pointer; text-decoration:none;
+    white-space:nowrap; overflow:hidden; }
+  .btn .ico { font-size:1rem; line-height:1; flex:none; }
+  .btn .lbl { overflow:hidden; text-overflow:ellipsis; }
   .btn.primary { background:#3d7eff; color:#fff; }
   .btn.secondary { background:#232838; color:#c9d4ff; border:1px solid #2c3140; }
   .btn:disabled { opacity:.45; }
@@ -58,8 +85,6 @@
     margin:3px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .ev.low { color:#e0a458; }
   .ev:empty { display:none; }
-  .linkbtn { background:none; border:0; color:#7aa2f7; font-size:.85rem; padding:6px 0;
-    cursor:pointer; text-decoration:underline; }
   .ok { color:#51cf66; margin: 0 0 6px; }
   .sub { color:#9aa0ab; font-size:.85rem; margin: 0 0 10px; }
 
@@ -81,7 +106,10 @@
   .logtbl a { color:#7aa2f7; text-decoration:none; }
   .logempty { color:#6d7380; font-family:ui-monospace,Menlo,monospace; font-size:.72rem; padding:8px 10px; }
 
+  /* min-width:0 — grid items default to min-width:auto, so a field with a wide
+     intrinsic size (iOS date) would overflow its column into its neighbour. */
   .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  .row2 > * { min-width: 0; }
   .spinner { display:inline-block; width:16px; height:16px; border:2px solid #fff3; border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-3px; margin-right:8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   a { color:#3d7eff; }
@@ -89,10 +117,14 @@
   /* Phone landscape: content left, action rail right; photo grid 4-across;
      the done screen's log gets the whole left pane. */
   @media (orientation: landscape) and (max-height: 500px) {
-    .screen.active { flex-direction: row; }
+    /* Landscape puts the notch on a side, not the top. */
+    .screen.active { flex-direction: row; padding-top: 0;
+      padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
     .sbody { max-width: none; padding: 10px 16px; }
     .actions { width: 230px; max-width: none; margin: 0; border-top: 0; border-left: 1px solid #1f232e;
       justify-content: flex-end; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
+    /* The rail is too narrow for two buttons side by side. */
+    .btnrow { flex-direction: column; }
     .grid2 { grid-template-columns: repeat(4, 1fr); }
     h1 { margin: 2px 0 8px; }
   }
@@ -138,9 +170,13 @@
     </div>
     <div class="actions">
       <div class="err" id="capErr"></div>
-      <button class="btn primary" id="extractBtn" onclick="extract()" disabled>Read photos</button>
-      <!-- Secondary path: no photo available (installed appliance, worn label). -->
-      <button class="linkbtn" onclick="location.hash = '#/confirm'">Skip photos — enter details manually</button>
+      <div class="btnrow">
+        <!-- Secondary path: no photo available (installed appliance, worn label). -->
+        <button class="btn secondary" onclick="location.hash = '#/confirm'">
+          <span class="ico">✍️</span><span class="lbl">Enter manually</span></button>
+        <button class="btn primary" id="extractBtn" onclick="extract()" disabled>
+          <span class="ico">🔍</span><span class="lbl">Read photos</span></button>
+      </div>
     </div>
   </div>
 
@@ -185,8 +221,12 @@
     </div>
     <div class="actions">
       <div class="err" id="confErr"></div>
-      <button class="btn primary" id="createBtn" onclick="createItem()">Add to Homebox</button>
-      <button class="btn secondary" onclick="location.hash = '#/capture'">← Photos</button>
+      <div class="btnrow">
+        <button class="btn secondary" onclick="location.hash = '#/capture'">
+          <span class="ico">📷</span><span class="lbl">Photos</span></button>
+        <button class="btn primary" id="createBtn" onclick="createItem()">
+          <span class="ico">➕</span><span class="lbl">Add to Homebox</span></button>
+      </div>
     </div>
   </div>
 
@@ -201,8 +241,12 @@
       </div>
     </div>
     <div class="actions">
-      <a id="itemLink" class="btn secondary" href="#" target="_blank">Open in Homebox</a>
-      <button class="btn primary" onclick="addAnother()">Add another</button>
+      <div class="btnrow">
+        <a id="itemLink" class="btn secondary" href="#" target="_blank">
+          <span class="ico">📦</span><span class="lbl">Open in Homebox</span></a>
+        <button class="btn primary" onclick="addAnother()">
+          <span class="ico">➕</span><span class="lbl">Add another</span></button>
+      </div>
     </div>
   </div>
 
@@ -218,6 +262,18 @@ let logId = null;
 // locally. Kept out of the form: submitted as hidden values, shown as hints.
 let extractMeta = {confidence: {}, evidence: {}, gtin: '', codeSerial: '', fccId: ''};
 let editedFields = {};
+
+// Action buttons carry icon markup, so a busy state has to stash and restore
+// the whole label rather than rebuild the text in each caller.
+function busy(btn, text) {
+  if (!btn.dataset.label) btn.dataset.label = btn.innerHTML;
+  btn.innerHTML = '<span class="spinner"></span>' + text;
+  btn.disabled = true;
+}
+function idle(btn) {
+  if (btn.dataset.label) btn.innerHTML = btn.dataset.label;
+  btn.disabled = false;
+}
 
 // Screen switcher: exactly one .screen active; each owns its scroll + actions.
 function show(id) {
@@ -241,6 +297,7 @@ function route() {
     if (known) $('itemLink').href = d.url;
     show('done');
     if (!d || d.liveLog !== false) startLog(id); // server 404s when disabled
+    else $('logBox').style.display = 'none';    // may be left over from a prior item
   } else if (h === '#/confirm') {
     restoreForm();
     const n = SLOTS.filter(s => files[s]).length;
@@ -337,8 +394,7 @@ async function extract() {
   for (const s of ['sticker', 'receipt', 'warranty', 'product'])
     if (files[s]) { fd.append(s, files[s]); any = true; }
   if (!any) return;
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Reading…';
+  busy(btn, 'Reading…');
   $('capErr').textContent = '';
   try {
     const r = await fetch('/api/extract', {method: 'POST', body: fd});
@@ -368,8 +424,7 @@ async function extract() {
   } catch (e) {
     $('capErr').textContent = 'Extraction failed: ' + e.message;
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Read photos';
+    idle(btn);
   }
 }
 
@@ -421,8 +476,7 @@ function renderQRs(urls) {
 async function createItem() {
   const btn = $('createBtn');
   if (!$('c_name').value.trim()) { $('confErr').textContent = 'Name is required.'; return; }
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Creating…';
+  busy(btn, 'Creating…');
   $('confErr').textContent = '';
   const fd = new FormData();
   FIELDS.forEach(k => fd.append(k, $('c_' + k).value.trim())); // one list, no drift
@@ -450,8 +504,7 @@ async function createItem() {
     location.hash = '#/done/' + encodeURIComponent(j.id); // route() shows + starts the log
   } catch (e) {
     $('confErr').textContent = 'Create failed: ' + e.message;
-    btn.disabled = false;
-    btn.textContent = 'Add to Homebox';
+    idle(btn);
   }
 }
 
