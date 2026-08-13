@@ -32,6 +32,10 @@ type SkimVerdict struct {
 	ModelConfirmed  bool // the item's model number appears in the document text
 	ClassMismatch   bool // doc is clearly a different class (parts list vs manual)
 	ProductMismatch bool // doc positively identifies a DIFFERENT product
+	// TextReason explains an empty read ("not-pdf", "parse-error", "no-text").
+	// Extraction failure used to be indistinguishable from a clean read; the
+	// scanner logs this as a skim.unreadable event so the rate is measurable.
+	TextReason string
 }
 
 // Skim inspects downloaded document bytes. Rules first: a direct scan of the
@@ -45,14 +49,17 @@ func (e *Engine) Skim(ctx context.Context, it Item, data []byte, wantClass strin
 	// and got attached as a "manual".
 	if !bytes.HasPrefix(data, []byte("%PDF")) {
 		log.Printf("skim: downloaded content is not a PDF")
+		v.TextReason = "not-pdf"
 		return v
 	}
 	v.IsPDF = true
 
-	text := pdfText(data, 6, 16_000)
+	text, reason := pdfText(data, 6, 3, 16_000)
 	if strings.TrimSpace(text) == "" {
-		// Scanned/image-only PDF: nothing to read. Benefit of the doubt —
-		// the search-layer gates already passed; no promote either.
+		// Scanned/image-only PDF, or an extractor failure. Either way the
+		// content is INCONCLUSIVE, not verified: skimAccepts routes
+		// non-official sources to a human instead of attaching blind (R4).
+		v.TextReason = reason
 		return v
 	}
 	v.HasText = true
@@ -124,21 +131,47 @@ func modelsEquivalent(itemModel, docModel string) bool {
 	return strings.Contains(a, b) || strings.Contains(b, a)
 }
 
-// pdfText pulls up to maxChars of text from the first maxPages of a PDF.
-// Returns "" when the PDF has no extractable text (scans) or parsing fails.
-func pdfText(data []byte, maxPages, maxChars int) string {
-	defer func() { _ = recover() }() // the pdf lib can panic on malformed files
+// pdfText pulls up to maxChars of text from a PDF's first `first` pages AND
+// its last `last` pages — "models covered" tables live on back covers and in
+// end-of-document spec tables as often as on the cover (R3). Returns the text
+// plus a reason string that is empty on success and otherwise explains why
+// nothing came out ("parse-error", "no-text").
+func pdfText(data []byte, first, last, maxChars int) (text string, reason string) {
+	reason = "parse-error"
+	defer func() {
+		if p := recover(); p != nil { // the pdf lib panics on malformed files
+			text, reason = "", "parse-error"
+		}
+	}()
 
 	r, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
-		return ""
+		return "", "parse-error"
 	}
+	total := r.NumPage()
+
+	// Page set: 1..first, plus the trailing `last` pages, de-duplicated for
+	// short documents where the two ranges overlap.
+	want := map[int]bool{}
+	var order []int
+	add := func(p int) {
+		if p >= 1 && p <= total && !want[p] {
+			want[p] = true
+			order = append(order, p)
+		}
+	}
+	for p := 1; p <= first; p++ {
+		add(p)
+	}
+	for p := total - last + 1; p <= total; p++ {
+		add(p)
+	}
+
 	var b strings.Builder
-	pages := r.NumPage()
-	if pages > maxPages {
-		pages = maxPages
-	}
-	for p := 1; p <= pages && b.Len() < maxChars; p++ {
+	for _, p := range order {
+		if b.Len() >= maxChars {
+			break
+		}
 		page := r.Page(p)
 		if page.V.IsNull() {
 			continue
@@ -154,5 +187,8 @@ func pdfText(data []byte, maxPages, maxChars int) string {
 	if len(out) > maxChars {
 		out = out[:maxChars]
 	}
-	return out
+	if out == "" {
+		return "", "no-text" // parsed fine, but the pages carry no text layer
+	}
+	return out, ""
 }

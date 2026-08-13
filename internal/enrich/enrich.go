@@ -9,14 +9,12 @@ package enrich
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/joseolivieri/homebox-docfetch/internal/llm"
-	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 )
 
 // Searcher provides raw search results (satisfied by discovery.Engine via a
@@ -308,27 +306,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
-}
-
-// Note appended to the entity's notes for provenance.
-func Note(frs []FieldResult) string {
-	var fields []string
-	ev := ""
-	for _, f := range frs {
-		if f.Action != ActionWrite {
-			continue
-		}
-		fields = append(fields, fmt.Sprintf("%s=%s (%.2f)", f.Field, f.Value, f.Confidence))
-		if ev == "" && len(f.Evidence) > 0 {
-			ev = f.Evidence[0]
-		}
-	}
-	if len(fields) == 0 {
-		return ""
-	}
-	line := "meta " + strings.Join(fields, ", ")
-	if ev != "" {
-		line += " " + notes.MDLink("src", ev)
-	}
-	return line
 }

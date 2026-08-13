@@ -13,6 +13,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -45,12 +47,24 @@ type Record struct {
 type Store struct{ db *sql.DB }
 
 // Open opens (creating if needed) the SQLite database and runs migrations.
+// The parent directory is created when absent (dev runs use ./data/dev.db).
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("create state dir %q: %w", dir, err)
+		}
+	}
+	// WAL + a busy timeout let the portal read (the /log pages and the
+	// post-create event feed poll every few seconds) while a scan pass holds
+	// the writer. Before D25 the scanner had the DB to itself and a single
+	// connection was fine; sharing the process made that a stall.
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // single writer; avoids SQLITE_BUSY under the scheduler
+	// One writer, several readers: modernc serializes writes internally, and
+	// WAL keeps readers off the writer's lock.
+	db.SetMaxOpenConns(4)
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
@@ -83,7 +97,13 @@ CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);`)
 	if err := s.migrateEnrich(); err != nil {
 		return err
 	}
-	return s.migrateDecisions()
+	if err := s.migrateDecisions(); err != nil {
+		return err
+	}
+	if err := s.migrateEvents(); err != nil {
+		return err
+	}
+	return s.migrateFacts()
 }
 
 // MetaHash is the identity fingerprint. When it changes for a known entity, the

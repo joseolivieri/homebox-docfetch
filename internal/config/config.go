@@ -63,13 +63,26 @@ type Notify struct {
 	NtfyToken string `yaml:"ntfy_token"` // optional bearer for restricted publish
 }
 
-// Notes tunes the machine-written log block in each entity's notes field.
+// Notes tunes the machine-written block in each entity's notes field. The
+// full audit trail lives in the events table (M2/D26); notes carry at most a
+// one-line breadcrumb.
 type Notes struct {
-	// AuditLog opt-in: log a terse line for EVERY derived write (intake photos,
-	// official photo, warranty, metadata) with confidence scores. Off = only
-	// doc attach/link events are logged.
+	// Breadcrumb keeps a single status line (artifact classes present + portal
+	// log link) in each entity's notes. Default true; nil means unset.
+	Breadcrumb *bool `yaml:"breadcrumb"`
+
+	// AuditLog is deprecated (ignored since M2): the per-write audit trail
+	// moved to the events table — see the portal /log pages or `docfetch log`.
 	AuditLog bool `yaml:"audit_log"`
+
+	// EventRetentionDays prunes audit events older than this in the weekly
+	// reconcile (0 = keep forever). Signal events (qr/approve/reject) are
+	// permanent and never pruned. Default 365.
+	EventRetentionDays int `yaml:"event_retention_days"`
 }
+
+// BreadcrumbEnabled resolves the breadcrumb default (on unless disabled).
+func (n Notes) BreadcrumbEnabled() bool { return n.Breadcrumb == nil || *n.Breadcrumb }
 
 // Intake — stage 1, the phone portal. Vision extraction + item creation only.
 type Intake struct {
@@ -77,7 +90,14 @@ type Intake struct {
 	PublicURL          string   `yaml:"public_url"` // e.g. https://docfetch.ingress-1...; target of ntfy action buttons
 	LocationEntityType string   `yaml:"location_entity_type"`
 	Photos             []string `yaml:"photos"` // intake photo slots (documentation; UI is fixed)
+
+	// LiveLog serves the activity log on the portal (/log pages + the
+	// near-live event feed on the post-create screen). Default true.
+	LiveLog *bool `yaml:"live_log"`
 }
+
+// LiveLogEnabled resolves the live-log default (on unless disabled).
+func (i Intake) LiveLogEnabled() bool { return i.LiveLog == nil || *i.LiveLog }
 
 // Curation — stage 2, the recurring scanner. All web searching happens here.
 type Curation struct {
@@ -221,6 +241,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) defaults() {
 	if c.Homebox.PageSize == 0 {
 		c.Homebox.PageSize = 100
+	}
+	if c.Notes.EventRetentionDays == 0 {
+		c.Notes.EventRetentionDays = 365
 	}
 	if c.Curation.Discovery.MaxCandidates == 0 {
 		c.Curation.Discovery.MaxCandidates = 8

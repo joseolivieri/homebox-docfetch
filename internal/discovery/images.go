@@ -224,7 +224,16 @@ func isMarketplaceImageHost(u string) bool {
 
 func isJunkImageHost(u string) bool {
 	l := strings.ToLower(u)
-	for _, bad := range []string{"pinterest.", "pinimg.", "ebay", "auctions.", "yimg.jp", "mercari", "aliexpress", "alibaba", "etsy.", "reddit", "fbcdn", "instagram"} {
+	for _, bad := range []string{
+		"pinterest.", "pinimg.", "ebay", "auctions.", "yimg.jp", "mercari",
+		"aliexpress", "alibaba", "etsy.", "reddit", "fbcdn", "instagram",
+		// Stock-photo libraries: generic scene imagery, never THE product
+		// (observed live: a pexels stock photo attached as a water timer's
+		// official product photo at 0.9).
+		"pexels.", "unsplash.", "shutterstock", "istockphoto", "gettyimages",
+		"freepik", "pixabay", "stock.adobe", "dreamstime", "depositphotos",
+		"alamy.",
+	} {
 		if strings.Contains(l, bad) {
 			return true
 		}

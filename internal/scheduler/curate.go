@@ -56,13 +56,13 @@ func (s *Scanner) attachApproved(ctx context.Context, detail *homebox.EntityOut,
 	}
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		n := notes.Append(updated.Notes, notes.Line(dc.Name+" attached via approve "+notes.MDLink("pdf", url)))
-		upd.Notes = &n
+		s.setBreadcrumb(ctx, &upd, updated.Notes, updated)
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", url))
 		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 			log.Printf("approve note put %s: %v", detail.ID, err)
 		}
 	}
+	s.event(ctx, detail, store.EvDocAttach, dc.Name, url, "via approve")
 	_, _ = s.store.LabelDecisions(ctx, detail.ID, url, store.LabelConfirmed, "ntfy")
 	log.Printf("manual attached via approve for %q — %s", detail.Name, url)
 	t := time.Now()
@@ -100,6 +100,7 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 		// label; never propose that image again; fall through to re-fetch.
 		if n, _ := s.store.LabelDecisions(ctx, detail.ID, last.ChosenURL, store.LabelRejected, "override"); n > 0 {
 			log.Printf("photo %s: user removed %s — labeled rejected, re-fetching", detail.ID, last.ChosenURL)
+			s.userEvent(ctx, detail, store.EvDocReject, "photo", last.ChosenURL, "removed via Homebox (sweep) — rejected, re-fetching")
 		}
 	} else if s.recentClassDecision(ctx, detail.ID, "photo") {
 		return
@@ -108,11 +109,11 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 	if subject == "" {
 		return
 	}
-	category := categoryOf(detail)
+	category := s.categoryOf(ctx, detail)
 	rejected, _ := s.store.RejectedURLs(ctx, detail.ID, "photo")
 
 	// Stage 1: og:image from known official pages.
-	for _, page := range s.officialPages(detail) {
+	for _, page := range s.officialPages(ctx, detail) {
 		og, err := s.curSearch.OGImage(ctx, page, 10<<20)
 		if err != nil || og == nil || rejected[og.Src] {
 			continue
@@ -163,6 +164,20 @@ func (s *Scanner) curatePhoto(ctx context.Context, detail *homebox.EntityOut) {
 		s.recordClass(ctx, detail, "photo", "notfound", "", conf)
 		return
 	}
+	// A7: "best of five" is not the same claim as "this is the product".
+	// The og:image path already verifies; the search path did not, which is
+	// how a generic stock photo attached at 0.90. One extra small vision call.
+	ok, vconf, err := s.vision.VerifyProductImage(ctx, s.visionModel, subject, category,
+		llm.IntakeImage{Data: cands[best].Data, Mime: cands[best].Mime})
+	if err != nil {
+		log.Printf("photo %s: winner verify: %v", detail.ID, err)
+		return
+	}
+	if !ok || vconf < s.cfg.PhotoMinConfidence {
+		log.Printf("photo %s: ranked winner failed verification (match=%v conf=%.2f) %s", detail.ID, ok, vconf, cands[best].Src)
+		s.recordClass(ctx, detail, "photo", "notfound", cands[best].Src, vconf)
+		return
+	}
 	s.attachPhoto(ctx, detail, cands[best], conf, "image-search")
 }
 
@@ -177,12 +192,14 @@ func (s *Scanner) attachPhoto(ctx context.Context, detail *homebox.EntityOut, ch
 
 	if fresh, err := s.api.GetEntity(ctx, detail.ID); err == nil {
 		upd := fullUpdateFrom(fresh)
-		n := notes.Append(fresh.Notes, notes.Line(fmt.Sprintf("photo (%.2f, %s) %s", conf, stage, notes.MDLink("src", chosen.Src))))
-		upd.Notes = &n
-		if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
-			log.Printf("photo %s: note put: %v", detail.ID, err)
+		s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
+		if upd.Notes != nil { // breadcrumb changed; otherwise skip the PUT entirely
+			if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
+				log.Printf("photo %s: note put: %v", detail.ID, err)
+			}
 		}
 	}
+	s.event(ctx, detail, store.EvPhotoAttach, "photo", chosen.Src, fmt.Sprintf("conf=%.2f stage=%s", conf, stage))
 	err := s.store.RecordDecision(ctx, &store.Decision{
 		EntityID: detail.ID, EntityName: detail.Name, DocClass: "photo",
 		Stage: stage, Outcome: "attached", ChosenURL: chosen.Src, Confidence: conf,
@@ -193,8 +210,8 @@ func (s *Scanner) attachPhoto(ctx context.Context, detail *homebox.EntityOut, ch
 }
 
 // officialPages lists pages with manufacturer provenance already on the item:
-// label QR targets and the linked official manual page.
-func (s *Scanner) officialPages(detail *homebox.EntityOut) []string {
+// label QR targets (qr.link events) and the linked official manual page.
+func (s *Scanner) officialPages(ctx context.Context, detail *homebox.EntityOut) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(u string) {
@@ -203,16 +220,27 @@ func (s *Scanner) officialPages(detail *homebox.EntityOut) []string {
 			out = append(out, u)
 		}
 	}
-	for _, u := range notes.QRURLs(detail.Notes) {
+	qr, _ := s.store.EventURLs(ctx, detail.ID, store.EvQRLink)
+	for _, u := range qr {
 		add(u)
 	}
 	add(notes.Target(homebox.FieldValue(detail.Fields, "Manual (web)")))
 	return out
 }
 
-// categoryOf derives the product type from the item's tags (enrichment writes
-// the category as a tag). Machine/triage tags are skipped.
-func categoryOf(detail *homebox.EntityOut) string {
+// categoryOf derives the product type. The label's own product type (read at
+// intake, stored as a fact) beats guessing from tags — "hose timer" off the
+// sticker is more specific than any tag the user happened to apply.
+func (s *Scanner) categoryOf(ctx context.Context, detail *homebox.EntityOut) string {
+	if pt, _ := s.store.FactValue(ctx, detail.ID, store.FactProductType); pt != "" {
+		return pt
+	}
+	return categoryFromTags(detail)
+}
+
+// categoryFromTags is the fallback: enrichment writes the category as a tag.
+// Machine/triage tags are skipped.
+func categoryFromTags(detail *homebox.EntityOut) string {
 	for _, t := range detail.Tags {
 		if strings.Contains(t.Name, "/") { // docfetch/unverified, source/docfetch
 			continue
@@ -299,15 +327,13 @@ func (s *Scanner) curateWarranty(ctx context.Context, detail *homebox.EntityOut)
 	default:
 		return
 	}
-	if s.cfg.AuditLog && auditLine != "" {
-		n := notes.Append(fresh.Notes, notes.Line(auditLine))
-		upd.Notes = &n
-	}
+	s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		log.Printf("warranty put %s: %v", detail.ID, err)
 		return
 	}
 	log.Printf("warranty %s: months=%d lifetime=%v (conf=%.2f)", detail.Name, est.Months, est.Lifetime, est.Confidence)
+	s.event(ctx, detail, store.EvWarrantySet, "warranty", est.Source, auditLine)
 	s.recordClass(ctx, detail, "warranty", "attached", est.Source, est.Confidence)
 }
 
@@ -369,6 +395,9 @@ func (s *Scanner) recordClass(ctx context.Context, detail *homebox.EntityOut, cl
 	})
 	if err != nil {
 		log.Printf("ledger record %s/%s: %v", detail.ID, class, err)
+	}
+	if outcome == "notfound" {
+		s.event(ctx, detail, store.EvNotFound, class, "", "no acceptable candidate")
 	}
 }
 

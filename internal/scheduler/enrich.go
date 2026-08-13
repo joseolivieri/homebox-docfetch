@@ -8,7 +8,6 @@ import (
 
 	"github.com/joseolivieri/homebox-docfetch/internal/enrich"
 	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
-	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homebox-docfetch/internal/notify"
 	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
@@ -103,10 +102,7 @@ func (s *Scanner) enrichEntity(ctx context.Context, detail *homebox.EntityOut) (
 			wroteCategory = fr.Value
 		}
 	}
-	if line := enrich.Note(writes); line != "" {
-		merged := notes.Append(detail.Notes, notes.Line(line))
-		upd.Notes = &merged
-	}
+	s.setBreadcrumb(ctx, &upd, detail.Notes, detail)
 	// Keep existing tags; add unverified so a human reviews the machine fill.
 	tagIDs := []string{s.unverifiedTagID}
 	for _, t := range detail.Tags {
@@ -142,41 +138,16 @@ func (s *Scanner) enrichEntity(ctx context.Context, detail *homebox.EntityOut) (
 			Confidence:   fr.Confidence,
 			EvidenceURLs: strings.Join(fr.Evidence, ","),
 		})
+		ev := ""
+		if len(fr.Evidence) > 0 {
+			ev = fr.Evidence[0]
+		}
+		s.event(ctx, detail, store.EvEnrichWrite, fr.Field, ev, fmt.Sprintf("%s=%q conf=%.2f", fr.Field, fr.Value, fr.Confidence))
 		log.Printf("enriched %q — %s=%q (conf=%.2f, sources=%d)", detail.Name, fr.Field, fr.Value, fr.Confidence, len(fr.Evidence))
 	}
 	return updated, nil
 }
 
-// fullUpdateFrom builds a complete EntityUpdate mirroring the current entity,
-// so a PUT (full replace) preserves everything we are not changing.
-func fullUpdateFrom(d *homebox.EntityOut) homebox.EntityUpdate {
-	upd := homebox.EntityUpdate{ID: d.ID, Name: d.Name}
-	cp := func(v string) *string { s := v; return &s }
-	upd.Manufacturer = cp(d.Manufacturer)
-	upd.ModelNumber = cp(d.ModelNumber)
-	upd.SerialNumber = cp(d.SerialNumber)
-	upd.AssetID = cp(d.AssetID)
-	upd.Notes = cp(d.Notes)
-	upd.Description = cp(d.Description)
-	upd.Quantity = &d.Quantity
-	upd.Insured = &d.Insured
-	upd.Archived = &d.Archived
-	upd.LifetimeWarranty = &d.LifetimeWarranty
-	upd.PurchaseFrom = cp(d.PurchaseFrom)
-	upd.PurchaseDate = cp(d.PurchaseDate)
-	upd.PurchasePrice = &d.PurchasePrice
-	upd.WarrantyExpires = cp(d.WarrantyExpires)
-	upd.WarrantyDetails = cp(d.WarrantyDetails)
-	if d.Parent != nil && d.Parent.ID != "" {
-		// PUT is a full replace; omitting parentId clears the location.
-		upd.ParentID = cp(d.Parent.ID)
-	}
-	// PUT without fields wipes all custom fields (verified live) — round-trip.
-	upd.Fields = d.Fields
-	var tags []string
-	for _, t := range d.Tags {
-		tags = append(tags, t.ID)
-	}
-	upd.TagIDs = tags
-	return upd
-}
+// fullUpdateFrom is a local alias for homebox.FullUpdateFrom (kept to avoid
+// churn at every scheduler call site).
+func fullUpdateFrom(d *homebox.EntityOut) homebox.EntityUpdate { return homebox.FullUpdateFrom(d) }

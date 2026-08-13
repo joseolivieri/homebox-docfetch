@@ -339,7 +339,7 @@ func bestHTML(cands []Candidate) *Candidate {
 	var best *Candidate
 	for i := range cands {
 		c := &cands[i]
-		if !c.IsHTML || !c.ModelMatch {
+		if !c.IsHTML || !c.ModelMatch || isMarketplacePage(c.URL) {
 			continue
 		}
 		if best == nil || c.Score > best.Score || (c.Official && !best.Official) {
@@ -347,6 +347,59 @@ func bestHTML(cands []Candidate) *Candidate {
 		}
 	}
 	return best
+}
+
+// isMarketplacePage flags listing/search pages and platform pages that must
+// never become a "<Field> (web)" support link — a marketplace search result
+// is not documentation (observed live: an eBay shop search linked as the
+// manual page for a water timer).
+func isMarketplacePage(u string) bool {
+	l := strings.ToLower(u)
+	for _, bad := range []string{
+		"ebay.", "amazon.", "walmart.", "aliexpress.", "alibaba.", "etsy.",
+		"temu.", "wish.com", "mercari", "rakuten.", "shopee.",
+	} {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return isPlatformPage(u)
+}
+
+// isIntermediaryHost flags hosts that sit BETWEEN the code and the brand:
+// anti-counterfeit/serialization vendors, QR services and link shorteners.
+// Their pages are worth following (they redirect to brand content) but their
+// domain must never be cached as the manufacturer's — the same poisoning that
+// would have cached youtube.com as a brand domain.
+func isIntermediaryHost(u string) bool {
+	l := strings.ToLower(u)
+	for _, h := range []string{
+		"scantrust.", "securikett.", "codikett.", "nanomatrixsecure.", "trackmatrix.",
+		"transparency.amazon", "qr-verse.", "qrco.de", "qrcodes.pro",
+		"bit.ly", "tinyurl.", "t.co/", "ow.ly", "rebrand.ly", "linktr.ee",
+	} {
+		if strings.Contains(l, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPlatformPage flags video/social platform hosts. A maker's YouTube channel
+// is genuine provenance (recorded as a qr.link event for the future
+// maintenance-videos milestone) but is not documentation: no PDFs to harvest,
+// never a brand domain, never a "(web)" support link.
+func isPlatformPage(u string) bool {
+	l := strings.ToLower(u)
+	for _, p := range []string{
+		"youtube.", "youtu.be", "vimeo.", "tiktok.",
+		"facebook.", "instagram.", "twitter.", "x.com/", "linktr.ee",
+	} {
+		if strings.Contains(l, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // applyModelGate zeroes confidence when a model match is required but absent.

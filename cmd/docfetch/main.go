@@ -2,11 +2,12 @@
 //
 // Subcommands:
 //
-//	scheduler   run the cron loop (scan / followup / reconcile)   [P1-07]
+//	serve       run scheduler + portal in one process (blessed)   [v2 M1]
 //	once        run a single scan pass and exit                    [P1-07]
-//	portal      run the photo-intake HTTP server                   [Phase 2]
 //	probe       smoke-test the Homebox client against the live API [dev]
 //	version     print version
+//	scheduler   deprecated: cron loop only (use serve)
+//	portal      deprecated: intake HTTP server only (use serve)
 package main
 
 import (
@@ -32,6 +33,8 @@ func main() {
 	cmd := os.Args[1]
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	cfgPath := fs.String("config", "config.yaml", "path to the property file")
+	logEntity := fs.String("entity", "", "log: filter to one entity id")
+	logN := fs.Int("n", 50, "log: max events to show")
 	_ = fs.Parse(os.Args[2:])
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -44,6 +47,10 @@ func main() {
 		mustRun(probe(ctx, *cfgPath))
 	case "once":
 		mustRun(runOnce(ctx, *cfgPath))
+	case "serve":
+		mustRun(runServe(ctx, *cfgPath))
+	case "log":
+		mustRun(runLog(ctx, *cfgPath, *logEntity, *logN))
 	case "scheduler":
 		mustRun(runScheduler(ctx, *cfgPath))
 	case "portal":
@@ -63,11 +70,13 @@ func usage() {
 usage: docfetch <command> [--config path]
 
 commands:
-  scheduler   run the cron loop (scan / followup / reconcile)   [P1-07]
-  once        run a single scan pass and exit                    [P1-07]
-  portal      run the photo-intake HTTP server                   [Phase 2]
+  serve       run scheduler + portal in one process (recommended)
+  once        run a single scan pass and exit
+  log         print recent activity events [--entity id] [-n 50]
   probe       smoke-test the Homebox client against the live API
   version     print version
+  scheduler   deprecated: cron loop only (use serve)
+  portal      deprecated: intake HTTP server only (use serve)
 `)
 }
 

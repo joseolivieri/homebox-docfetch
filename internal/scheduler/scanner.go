@@ -14,12 +14,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joseolivieri/homebox-docfetch/internal/discovery"
 	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homebox-docfetch/internal/notes"
 	"github.com/joseolivieri/homebox-docfetch/internal/notify"
+	"github.com/joseolivieri/homebox-docfetch/internal/sign"
 	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
@@ -76,7 +78,13 @@ type Config struct {
 	PhotoEnabled       bool
 	PhotoMinConfidence float64
 	WarrantyEnabled    bool
-	AuditLog           bool
+
+	// Breadcrumb keeps a single status line (+ portal log link) in the entity
+	// notes; the full audit trail lives in the events table (M2/D26).
+	Breadcrumb bool
+	// EventRetention prunes audit events older than this in the weekly
+	// reconcile (0 = never). Signal events (qr/approve/reject) are never pruned.
+	EventRetention time.Duration
 }
 
 // manualClass returns the primary "manual" class config (synthesized if the
@@ -98,6 +106,13 @@ type Scanner struct {
 	cfg      Config
 	enricher Enricher // nil = enrichment disabled
 
+	// inflight guards per-entity processing: a fresh intake can be hit by the
+	// portal trigger, the change-poll scan, and the cron scan nearly at once,
+	// and concurrent process() runs double-attach photos/docs (observed live:
+	// duplicate official photo + a stray third pick on one intake).
+	inflightMu sync.Mutex
+	inflight   map[string]bool
+
 	// Curation extras (nil = disabled): web search + vision surfaces.
 	curSearch   CurationSearch
 	vision      Vision
@@ -116,7 +131,25 @@ func NewScanner(api EntityAPI, disc Discoverer, n Notifier, st *store.Store, cfg
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = 24 * time.Hour
 	}
-	return &Scanner{api: api, disc: disc, ntfy: n, store: st, cfg: cfg}
+	return &Scanner{api: api, disc: disc, ntfy: n, store: st, cfg: cfg, inflight: map[string]bool{}}
+}
+
+// tryAcquire marks an entity as being processed. False = another goroutine is
+// already on it; the caller skips (state converges on the next tick).
+func (s *Scanner) tryAcquire(id string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if s.inflight[id] {
+		return false
+	}
+	s.inflight[id] = true
+	return true
+}
+
+func (s *Scanner) release(id string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.inflight, id)
 }
 
 // SetEnricher enables metadata enrichment (Phase 1.5).
@@ -198,6 +231,11 @@ func (s *Scanner) ProcessEntity(ctx context.Context, id string) error {
 }
 
 func (s *Scanner) process(ctx context.Context, sum *homebox.EntitySummary, followup bool) error {
+	if !s.tryAcquire(sum.ID) {
+		log.Printf("skip %q (%s): already being processed", sum.Name, sum.ID)
+		return nil
+	}
+	defer s.release(sum.ID)
 	now := time.Now()
 	rec, err := s.store.Get(ctx, sum.ID)
 	if err != nil {
@@ -258,20 +296,25 @@ func (s *Scanner) processDocs(ctx context.Context, detail *homebox.EntityOut, re
 
 	manual := s.cfg.manualClass()
 
-	// One-tap approval queued via the notes block (the portal makes no web
-	// calls — the Attach button just writes "approved [pdf](url)"). Fulfil it
-	// here: download + attach the exact URL the human approved, no discovery.
-	if approved := notes.ApprovedURLs(detail.Notes); len(approved) > 0 {
+	// One-tap approval queued as a doc.approve event (the portal makes no web
+	// calls — the Attach button just records the signal). Fulfil it here:
+	// download + attach the exact URL the human approved, no discovery. Skip
+	// once the manual is present — approve signals are permanent state.
+	if approved, _ := s.store.EventURLs(ctx, detail.ID, store.EvDocApprove); len(approved) > 0 && !hasDoc(detail, manual) {
 		return s.attachApproved(ctx, detail, approved[len(approved)-1], base, manual)
 	}
 
+	// Trusted starting points, tried by the qr stage before any searching:
+	// links printed on the physical label (qr.link) and product pages the
+	// user supplied (lead.url). Different provenance, same strength of claim.
+	hints, _ := s.store.EventURLs(ctx, detail.ID, store.EvQRLink)
+	leads, _ := s.store.EventURLs(ctx, detail.ID, store.EvLeadURL)
+	hints = append(hints, leads...)
 	item := discovery.Item{
 		Manufacturer: detail.Manufacturer,
 		ModelNumber:  detail.ModelNumber,
 		Name:         detail.Name,
-		// Label QR links recorded at intake (or hand-added "- qr <url>" lines):
-		// the qr pipeline stage follows these before any searching.
-		HintURLs: notes.QRURLs(detail.Notes),
+		HintURLs:     hints,
 	}
 	if strings.TrimSpace(item.Manufacturer) == "" && strings.TrimSpace(item.ModelNumber) == "" && strings.TrimSpace(item.Name) == "" {
 		log.Printf("skip %q — no searchable identity", detail.Name)
@@ -350,7 +393,7 @@ func (s *Scanner) resolveManual(ctx context.Context, detail *homebox.EntityOut, 
 		return s.attach(ctx, detail, item, res, dc, rec, base, data)
 	}
 	switch {
-	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
+	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold && !weakIdentity(item):
 		log.Printf("attach %q [%s] — conf=%.2f llm=%v url=%s", detail.Name, dc.Name, res.Confidence, res.UsedLLM, res.Best.URL)
 		return s.attach(ctx, detail, item, res, dc, rec, base, nil)
 	case res.BestHTML != nil:
@@ -557,17 +600,17 @@ func containsClass(cs []DocClassCfg, name string) bool {
 	return false
 }
 
-// rejectedSet unions ledger rejections with "rejected" lines in the entity's
-// notes block (the reject button writes there — Homebox is the shared bus
-// between the portal and scheduler processes), ingesting new notes rejections
-// as ledger labels on first sight.
+// rejectedSet unions ledger rejections with doc.reject events (the reject
+// button records the event; legacy notes lines arrive via importNotes),
+// ingesting new rejections as ledger labels on first sight.
 func (s *Scanner) rejectedSet(ctx context.Context, detail *homebox.EntityOut) map[string]bool {
 	set, err := s.store.RejectedURLs(ctx, detail.ID, s.cfg.manualClass().Name)
 	if err != nil {
 		log.Printf("ledger rejected urls %s: %v", detail.ID, err)
 		set = map[string]bool{}
 	}
-	for _, u := range notes.RejectedURLs(detail.Notes) {
+	rejectedEvents, _ := s.store.EventURLs(ctx, detail.ID, store.EvDocReject)
+	for _, u := range rejectedEvents {
 		if set[u] {
 			continue
 		}
@@ -653,6 +696,15 @@ func (s *Scanner) recordDecision(ctx context.Context, detail *homebox.EntityOut,
 	if err := s.store.RecordDecision(ctx, d); err != nil {
 		log.Printf("ledger record %s: %v", detail.ID, err)
 	}
+	// Full audit: empty-handed passes are events too (attach/link/review have
+	// dedicated events at their call sites).
+	if outcome == "notfound" {
+		extra := "no acceptable candidate"
+		if res != nil {
+			extra = fmt.Sprintf("no acceptable candidate (stage=%s candidates=%d)", res.Stage, len(res.Candidates))
+		}
+		s.event(ctx, detail, store.EvNotFound, dc.Name, "", extra)
+	}
 }
 
 // linkManual records online doc sources in custom fields — "<Field>" for a
@@ -667,7 +719,12 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 	upd := fullUpdateFrom(fresh)
 	var links []string
 	docURL := ""
-	if res.Best != nil && res.Best.IsPDF {
+	// Only an OFFICIAL remote PDF may be linked: everything that reaches this
+	// path is content-unverified (skim failed or the download was bot-walled),
+	// and linking a non-official unverified PDF shipped a wrong-company manual
+	// (observed live: an Ecowitt sensor PDF linked on a water timer). Official
+	// provenance is the one signal that survives without reading the bytes.
+	if res.Best != nil && res.Best.IsPDF && res.Best.Official {
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", res.Best.URL))
 		links = append(links, notes.MDLink("pdf", res.Best.URL))
 		docURL = res.Best.URL
@@ -686,12 +743,12 @@ func (s *Scanner) linkManual(ctx context.Context, detail *homebox.EntityOut, res
 		}
 		return s.reviewGate(ctx, detail, res, base)
 	}
-	n := notes.Append(fresh.Notes, notes.Line(dc.Name+" linked "+strings.Join(links, " ")))
-	upd.Notes = &n
+	s.setBreadcrumb(ctx, &upd, fresh.Notes, fresh)
 	if _, err := s.api.PutEntity(ctx, detail.ID, upd); err != nil {
 		return err
 	}
 	log.Printf("%s linked for %q — %s", dc.Name, detail.Name, docURL)
+	s.event(ctx, detail, store.EvDocLink, dc.Name, docURL, strings.Join(links, " "))
 	s.recordDecision(ctx, detail, res, dc, "linked", docURL)
 	if base != nil {
 		t := time.Now()
@@ -722,13 +779,24 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 				// remote sources instead — a phone browser passes the bot wall.
 				return s.linkManual(ctx, detail, res, dc, base)
 			}
-		} else if !skimAccepts(s.disc.Skim(ctx, item, data, dc.Name), best) {
+		} else if v := s.disc.Skim(ctx, item, data, dc.Name); !skimAccepts(v, best) {
 			// Official brand-domain docs skip the different-product veto
 			// (provenance beats a sparse-excerpt LLM read; observed
 			// false-negatives on image-heavy official manuals) but NOT the
 			// PDF-magic or wrong-class checks — an official parts list must
 			// still not attach as the manual.
+			if v.TextReason != "" {
+				s.event(ctx, detail, store.EvSkimUnreadable, dc.Name, best.URL,
+					"could not read document text: "+v.TextReason)
+			}
+			// R4: unreadable + non-official is inconclusive. Ask the human
+			// instead of attaching blind or dropping the candidate silently.
+			if unreadableNonOfficial(v, best) && base != nil {
+				log.Printf("review-gate %q [%s] — unreadable non-official doc (%s) %s", detail.Name, dc.Name, v.TextReason, best.URL)
+				return s.reviewGate(ctx, detail, res, base)
+			}
 			log.Printf("content skim rejected %q [%s] (%s); trying fallback candidates", detail.Name, dc.Name, best.URL)
+			s.event(ctx, detail, store.EvSkimVeto, dc.Name, best.URL, "content skim rejected; trying fallbacks")
 			best, data = s.downloadFallback(ctx, res, item, dc)
 			if best == nil {
 				res.Best = nil
@@ -751,13 +819,11 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 	if err != nil {
 		return err
 	}
-	// Log the attach + link the source in custom fields (Homebox auto-links a
-	// single URL per field).
+	// Link the source in custom fields (Homebox auto-links a single URL per
+	// field) + refresh the breadcrumb; the audit line is an event now.
 	if updated != nil && updated.ID != "" {
 		upd := fullUpdateFrom(updated)
-		line := fmt.Sprintf("%s attached (%.2f) %s", dc.Name, res.Confidence, notes.MDLink("pdf", best.URL))
-		n := notes.Append(updated.Notes, notes.Line(line))
-		upd.Notes = &n
+		s.setBreadcrumb(ctx, &upd, updated.Notes, updated)
 		upd.Fields = homebox.UpsertField(upd.Fields, dc.Field, notes.MDLink("pdf", best.URL))
 		if res.BestHTML != nil && res.BestHTML.Official {
 			upd.Fields = homebox.UpsertField(upd.Fields, dc.Field+" (web)", notes.MDLink("web", res.BestHTML.URL))
@@ -766,6 +832,7 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 			log.Printf("attach note put %s: %v", detail.ID, err)
 		}
 	}
+	s.event(ctx, detail, store.EvDocAttach, dc.Name, best.URL, fmt.Sprintf("conf=%.2f", res.Confidence))
 	s.recordDecision(ctx, detail, res, dc, "attached", best.URL)
 	if base == nil {
 		return nil // secondary class: no store record to update
@@ -815,13 +882,14 @@ func (s *Scanner) reviewGate(ctx context.Context, detail *homebox.EntityOut, res
 	}
 	if s.cfg.PortalURL != "" && s.cfg.SignKey != "" {
 		msg.Actions = []string{
-			"http, Attach, " + ActionURL(s.cfg.PortalURL, "approve", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
-			"http, Reject, " + ActionURL(s.cfg.PortalURL, "reject", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST",
+			"http, Attach, " + sign.ActionURL(s.cfg.PortalURL, "approve", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST, clear=true",
+			"http, Reject, " + sign.ActionURL(s.cfg.PortalURL, "reject", detail.ID, res.Best.URL, s.cfg.SignKey) + ", method=POST",
 		}
 	}
 	if err := s.ntfy.Send(ctx, msg); err != nil {
 		return err
 	}
+	s.event(ctx, detail, store.EvReviewRequest, dc.Name, res.Best.URL, why)
 	s.recordDecision(ctx, detail, res, dc, "review", res.Best.URL)
 	base.DocURL = res.Best.URL
 	base.Status = store.StatusPendingReview
@@ -884,6 +952,51 @@ func (s *Scanner) recordError(ctx context.Context, sum *homebox.EntitySummary, c
 		base.Attempts = rec.Attempts + 1
 	}
 	_ = s.store.Upsert(ctx, base)
+	_ = s.store.AppendEvent(ctx, &store.Event{
+		EntityID: sum.ID, EntityName: sum.Name, Actor: store.ActorScanner,
+		Kind: store.EvError, Detail: cause.Error(),
+	})
+}
+
+// event appends an activity-log row for a scanner action (M2/D26–D27: written
+// synchronously at the decision point; aggregation is read-time SQL).
+func (s *Scanner) event(ctx context.Context, detail *homebox.EntityOut, kind, class, url, extra string) {
+	s.actorEvent(ctx, detail, store.ActorScanner, kind, class, url, extra)
+}
+
+// userEvent logs an action the scanner *detected* but the user performed
+// (artifact deleted in Homebox, machine value corrected).
+func (s *Scanner) userEvent(ctx context.Context, detail *homebox.EntityOut, kind, class, url, extra string) {
+	s.actorEvent(ctx, detail, store.ActorUser, kind, class, url, extra)
+}
+
+func (s *Scanner) actorEvent(ctx context.Context, detail *homebox.EntityOut, actor, kind, class, url, extra string) {
+	err := s.store.AppendEvent(ctx, &store.Event{
+		EntityID: detail.ID, EntityName: detail.Name, Actor: actor,
+		Kind: kind, Class: class, URL: url, Detail: extra,
+	})
+	if err != nil {
+		log.Printf("event %s %s: %v", kind, detail.ID, err)
+	}
+}
+
+// setBreadcrumb replaces the notes docfetch block with the single status
+// line: "docfetch: N updates — [log](…)". N is the entity's event count at
+// PUT time (an event written just after this PUT shows on the next rewrite —
+// the log page is the precise surface). No-op when disabled or when the
+// rendered notes value is unchanged (avoids a pointless updatedAt bump).
+func (s *Scanner) setBreadcrumb(ctx context.Context, upd *homebox.EntityUpdate, existing string, detail *homebox.EntityOut) {
+	if !s.cfg.Breadcrumb {
+		return
+	}
+	count, last, err := s.store.EventStats(ctx, detail.ID)
+	if err != nil {
+		return
+	}
+	n := notes.Breadcrumb(existing, notes.BreadcrumbLine(count, last, s.cfg.PortalURL, detail.ID))
+	if n != existing {
+		upd.Notes = &n
+	}
 }
 
 // downloadFallback tries the remaining PDF candidates in score order; each one
@@ -915,6 +1028,12 @@ func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, i
 
 // skimAccepts is the attach veto: real PDF, right class, and (for non-official
 // sources) not positively a different product.
+//
+// R4: a document whose text could not be read is INCONCLUSIVE, not verified.
+// Provenance decides what that means — an official brand-domain or QR-linked
+// PDF still attaches (the source is the evidence), but an unreadable
+// aggregator/search result no longer gets the benefit of the doubt. Before
+// this, every extraction failure was a silent unverified attach.
 func skimAccepts(v discovery.SkimVerdict, c *discovery.Candidate) bool {
 	if !v.IsPDF || v.ClassMismatch {
 		return false
@@ -922,8 +1041,30 @@ func skimAccepts(v discovery.SkimVerdict, c *discovery.Candidate) bool {
 	if !c.Official && v.ProductMismatch {
 		return false
 	}
+	if !v.HasText && !c.Official {
+		return false
+	}
 	return true
 }
+
+// unreadableNonOfficial reports the R4 case that must reach a human rather
+// than being attached or silently discarded.
+func unreadableNonOfficial(v discovery.SkimVerdict, c *discovery.Candidate) bool {
+	return v.IsPDF && !v.HasText && !c.Official && !v.ClassMismatch
+}
+
+// weakIdentity reports that the item lacks the model number every content
+// check keys off (skimPromote returns early without one, modelInText needs
+// >=4 chars). Such an item can otherwise reach auto-attach on rules + rerank
+// score alone — R6 caps that at link/review instead.
+func weakIdentity(it discovery.Item) bool {
+	return len(norm(it.ModelNumber)) < 4
+}
+
+// norm mirrors discovery's normalization for the identity check.
+func norm(s string) string { return nonAlnumSched.ReplaceAllString(strings.ToLower(s), "") }
+
+var nonAlnumSched = regexp.MustCompile(`[^a-z0-9]+`)
 
 // bestOfficialPDF returns the highest-scored official-domain PDF candidate.
 func bestOfficialPDF(cands []discovery.Candidate) *discovery.Candidate {

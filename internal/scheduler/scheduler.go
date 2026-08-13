@@ -69,12 +69,17 @@ func Run(ctx context.Context, sc *Scanner, specs Specs) error {
 	}
 
 	// Change-poll loop: cheap probe, full scan only when the collection changed.
+	// The cursor persists in the store (meta table) so a restart/deploy does
+	// not re-prime the signal and silently eat pending change notifications.
 	if specs.ChangePoll > 0 {
 		scan := guard("change-scan", func(ctx context.Context) error { return sc.Scan(ctx, false) })
 		go func() {
 			t := time.NewTicker(specs.ChangePoll)
 			defer t.Stop()
-			last := ""
+			last, err := sc.store.GetMeta(ctx, "change_signal")
+			if err != nil {
+				log.Printf("[change-poll] load cursor: %v", err)
+			}
 			for {
 				select {
 				case <-ctx.Done():
@@ -85,15 +90,19 @@ func Run(ctx context.Context, sc *Scanner, specs Specs) error {
 						log.Printf("[change-poll] probe error: %v", err)
 						continue
 					}
-					if last == "" { // first probe just primes the signal
-						last = sig
+					if sig == last {
 						continue
 					}
-					if sig != last {
-						last = sig
-						log.Printf("[change-poll] collection changed; scanning")
-						scan()
+					prime := last == "" // no persisted cursor: prime without scanning
+					last = sig
+					if err := sc.store.SetMeta(ctx, "change_signal", sig); err != nil {
+						log.Printf("[change-poll] save cursor: %v", err)
 					}
+					if prime {
+						continue
+					}
+					log.Printf("[change-poll] collection changed; scanning")
+					scan()
 				}
 			}
 		}()

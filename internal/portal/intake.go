@@ -2,6 +2,7 @@ package portal
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/joseolivieri/homebox-docfetch/internal/homebox"
 	"github.com/joseolivieri/homebox-docfetch/internal/notes"
+	"github.com/joseolivieri/homebox-docfetch/internal/store"
 )
 
 // handleCreate commits a confirmed intake: creates the entity, PUTs metadata,
@@ -105,40 +107,71 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		upd.WarrantyDetails = &d
 	}
 
-	noteLines := []string{notes.Line("created via photo intake")}
-	// QR support links (decoded locally at extract, confirmed by the user).
-	// One "qr" notes line each — the scanner's qr pipeline stage reads these —
+	// QR support links (decoded locally at extract, confirmed by the user):
+	// qr.link signal events — the scanner's qr pipeline stage reads these —
 	// plus a visible custom field for the first one.
 	var qrURLs []string
 	for _, u := range r.Form["qrUrl"] {
 		if u = strings.TrimSpace(u); u != "" && usableQRURL(u) {
 			qrURLs = append(qrURLs, u)
-			noteLines = append(noteLines, notes.Line("qr "+notes.MDLink("link", u)))
 		}
 	}
 	if len(qrURLs) > 0 {
 		upd.Fields = homebox.UpsertField(upd.Fields, "Support (QR)", notes.MDLink("qr", qrURLs[0]))
 	}
-	if s.cfg.Notes.AuditLog {
-		// Terse provenance for everything the intake attaches/derives.
-		var got []string
-		for _, f := range []string{"sticker", "receipt", "product", "warranty"} {
-			if r.MultipartForm != nil && len(r.MultipartForm.File[f]) > 0 {
-				got = append(got, f)
-			}
-		}
-		if len(got) > 0 {
-			noteLines = append(noteLines, notes.Line("photos: "+strings.Join(got, ", ")))
-		}
-		if warrantyMonths > 0 {
-			noteLines = append(noteLines, notes.Line(fmt.Sprintf("warranty %dmo (from photo)", warrantyMonths)))
+
+	// Intake provenance is events now (M2/D26); notes carry one breadcrumb line.
+	var got []string
+	for _, f := range []string{"sticker", "receipt", "product", "warranty"} {
+		if r.MultipartForm != nil && len(r.MultipartForm.File[f]) > 0 {
+			got = append(got, f)
 		}
 	}
-	note := notes.Append("", noteLines...)
+	// Count matches the events appended below (intake.created + one per QR).
+	note := notes.Breadcrumb("", notes.BreadcrumbLine(1+len(qrURLs), time.Now(), s.cfg.Intake.PublicURL, ent.ID))
 	upd.Notes = &note
 	if _, err := s.hb.PutEntity(ctx, ent.ID, upd); err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("metadata put: %w", err))
 		return
+	}
+
+	detail := fmt.Sprintf("photos: %s", strings.Join(got, ", "))
+	if warrantyMonths > 0 {
+		detail += fmt.Sprintf("; warranty %dmo (from photo)", warrantyMonths)
+	}
+	_ = s.st.AppendEvent(ctx, &store.Event{
+		EntityID: ent.ID, EntityName: name, Actor: store.ActorPortal,
+		Kind: store.EvIntakeCreated, Detail: detail,
+	})
+	for _, u := range qrURLs {
+		_ = s.st.AppendEvent(ctx, &store.Event{
+			EntityID: ent.ID, EntityName: name, Actor: store.ActorPortal,
+			Kind: store.EvQRLink, URL: u, Detail: "label QR (intake)",
+		})
+	}
+	s.recordIntakeFacts(ctx, ent.ID, r)
+
+	// User-supplied links. Both reuse signal paths that already exist rather
+	// than inventing new machinery (plan §6.7):
+	//   product page -> a lead the qr stage resolves and harvests, exactly
+	//                   like a QR-scanned support page;
+	//   manual URL   -> doc.approve, the same claim as tapping Attach on a
+	//                   review prompt, so attachApproved fetches it as-is.
+	if u := strings.TrimSpace(r.FormValue("productUrl")); usableQRURL(u) {
+		_ = s.st.AppendEvent(ctx, &store.Event{
+			EntityID: ent.ID, EntityName: name, Actor: store.ActorUser,
+			Kind: store.EvLeadURL, URL: u, Detail: "product page (entered at intake)",
+		})
+		_ = s.st.PutFact(ctx, &store.Fact{
+			EntityID: ent.ID, Kind: store.FactLeadURL, Value: u,
+			Confidence: 1, Source: store.SourceUser,
+		})
+	}
+	if u := strings.TrimSpace(r.FormValue("manualUrl")); usableQRURL(u) {
+		_ = s.st.AppendEvent(ctx, &store.Event{
+			EntityID: ent.ID, EntityName: name, Actor: store.ActorUser,
+			Kind: store.EvDocApprove, URL: u, Detail: "manual URL supplied at intake",
+		})
 	}
 
 	// 3. Attach intake photos. The personal product photo becomes the primary
@@ -166,43 +199,17 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
-		"id":  ent.ID,
-		"url": strings.TrimRight(s.cfg.Homebox.URL, "/") + "/item/" + ent.ID,
-	})
-}
+	// Serve mode: process the new item now instead of waiting for the
+	// change-poll to notice the creation.
+	if s.trigger != nil {
+		s.trigger(ent.ID)
+	}
 
-// fullUpdate mirrors scheduler.fullUpdateFrom for the portal package.
-func fullUpdate(d *homebox.EntityOut) homebox.EntityUpdate {
-	cp := func(v string) *string { s := v; return &s }
-	upd := homebox.EntityUpdate{ID: d.ID, Name: d.Name}
-	upd.Manufacturer = cp(d.Manufacturer)
-	upd.ModelNumber = cp(d.ModelNumber)
-	upd.SerialNumber = cp(d.SerialNumber)
-	upd.AssetID = cp(d.AssetID)
-	upd.Notes = cp(d.Notes)
-	upd.Description = cp(d.Description)
-	upd.Quantity = &d.Quantity
-	upd.Insured = &d.Insured
-	upd.Archived = &d.Archived
-	upd.LifetimeWarranty = &d.LifetimeWarranty
-	upd.PurchaseFrom = cp(d.PurchaseFrom)
-	upd.PurchaseDate = cp(d.PurchaseDate)
-	upd.PurchasePrice = &d.PurchasePrice
-	upd.WarrantyExpires = cp(d.WarrantyExpires)
-	upd.WarrantyDetails = cp(d.WarrantyDetails)
-	if d.Parent != nil && d.Parent.ID != "" {
-		// PUT is a full replace; omitting parentId clears the location.
-		upd.ParentID = cp(d.Parent.ID)
-	}
-	// PUT without fields wipes all custom fields (verified live).
-	upd.Fields = d.Fields
-	var tags []string
-	for _, t := range d.Tags {
-		tags = append(tags, t.ID)
-	}
-	upd.TagIDs = tags
-	return upd
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      ent.ID,
+		"url":     strings.TrimRight(s.cfg.Homebox.URL, "/") + "/item/" + ent.ID,
+		"liveLog": s.cfg.Intake.LiveLogEnabled(),
+	})
 }
 
 func extFor(mime string) string {
@@ -225,3 +232,48 @@ func truncate(s string, n int) string {
 }
 
 var _ = http.StatusOK
+
+// recordIntakeFacts persists what the confirm screen carried but Homebox has
+// no field for, plus the read confidences (plan §1.4/§6.6). Facts are durable
+// while photos are not: staged images age out, so anything not extracted here
+// is gone. Values the user saw and submitted count as human-confirmed.
+func (s *Server) recordIntakeFacts(ctx context.Context, entityID string, r *http.Request) {
+	put := func(kind, value, source string, conf float64) {
+		if value = strings.TrimSpace(value); value == "" {
+			return
+		}
+		if err := s.st.PutFact(ctx, &store.Fact{
+			EntityID: entityID, Kind: kind, Value: value,
+			Confidence: conf, Source: source,
+		}); err != nil {
+			log.Printf("portal: fact %s for %s: %v", kind, entityID, err)
+		}
+	}
+
+	// Identifiers decoded from codes — the keys future resolvers look up.
+	put(store.FactGTIN, r.FormValue("gtin"), store.SourceBarcode, 1)
+	put(store.FactUnitSerial, r.FormValue("codeSerial"), store.SourceBarcode, 1)
+	put(store.FactFCCID, r.FormValue("fccId"), store.SourceVision, 1)
+	// Product type: read off the label, and the category gate's best input —
+	// better than inferring a category from tags or the item name.
+	put(store.FactProductType, r.FormValue("productType"), store.SourceUser, 1)
+
+	// Per-field vision confidence. The model already reports how sure it was;
+	// discarding it meant a 0.62 model-number read was trusted like a 0.99.
+	for _, f := range []string{"manufacturer", "modelNumber", "serialNumber", "name"} {
+		raw := strings.TrimSpace(r.FormValue("conf_" + f))
+		if raw == "" {
+			continue
+		}
+		c, err := strconv.ParseFloat(raw, 64)
+		if err != nil || c <= 0 || c > 1 {
+			continue
+		}
+		// A field the user edited is theirs, not the model's.
+		src, conf := store.SourceVision, c
+		if r.FormValue("edited_"+f) == "1" {
+			src, conf = store.SourceUser, 1
+		}
+		put(store.FactFieldConf, f+"="+strconv.FormatFloat(conf, 'f', 2, 64), src, conf)
+	}
+}

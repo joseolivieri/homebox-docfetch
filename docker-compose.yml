@@ -1,32 +1,15 @@
 services:
+  # Single custom-code container (plan-architecture-v2 M1 / D25): `serve` runs
+  # the curation scheduler and the photo-intake portal in one process on the
+  # shared /data store. Portal port is Tailscale-only in the reference deploy:
+  # bound to the node's Tailscale IP; ingress Caddy proxies to it.
   docfetch:
     build: .
     image: docfetch:local
     container_name: docfetch
     restart: unless-stopped
+    command: ["serve", "--config", "/config/config.yaml"]
     depends_on:
-      - searxng
-    environment:
-      HOMEBOX_TOKEN: ${HOMEBOX_TOKEN}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      NTFY_TOKEN: ${NTFY_TOKEN:-}
-      TZ: ${TZ:-UTC}
-    volumes:
-      - ${DATA_ROOT:-./data}/docfetch:/data
-      - ./config.yaml:/config/config.yaml:ro
-    networks:
-      - docfetch
-
-  # Phase-2 photo-intake portal. Same image, portal subcommand. Tailscale-only:
-  # bound to the node's Tailscale IP; ingress-1 Caddy proxies
-  # docfetch.ingress-1.jentaculum.net to it.
-  portal:
-    image: docfetch:local
-    container_name: docfetch-portal
-    restart: unless-stopped
-    command: ["portal", "--config", "/config/config.yaml"]
-    depends_on:
-      - docfetch
       - searxng
     environment:
       HOMEBOX_TOKEN: ${HOMEBOX_TOKEN}
@@ -36,7 +19,7 @@ services:
     ports:
       - "${TAILSCALE_IP:-127.0.0.1}:8099:8099"
     volumes:
-      - ${DATA_ROOT:-./data}/docfetch-portal:/data
+      - ${DATA_ROOT:-./data}/docfetch:/data
       - ./config.yaml:/config/config.yaml:ro
     networks:
       - docfetch
