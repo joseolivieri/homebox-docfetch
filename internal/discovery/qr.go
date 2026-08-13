@@ -38,7 +38,12 @@ func (e *Engine) qrCandidates(ctx context.Context, it Item) []Candidate {
 			log.Printf("qr stage: platform target (kept as provenance only): %s", finalURL)
 			continue
 		}
-		e.seedBrandCache(it.Manufacturer, finalURL)
+		// Never let an intermediary become the manufacturer's domain: the
+		// brand-protection vendors below host the redirect, not the brand.
+		// Same poisoning class as the platform-page guard above.
+		if !isIntermediaryHost(finalURL) {
+			e.seedBrandCache(it.Manufacturer, finalURL)
+		}
 
 		if strings.Contains(contentType, "application/pdf") || strings.HasSuffix(strings.ToLower(finalURL), ".pdf") {
 			out = append(out, Candidate{

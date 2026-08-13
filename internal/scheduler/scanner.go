@@ -390,7 +390,7 @@ func (s *Scanner) resolveManual(ctx context.Context, detail *homebox.EntityOut, 
 		return s.attach(ctx, detail, item, res, dc, rec, base, data)
 	}
 	switch {
-	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold:
+	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold && !weakIdentity(item):
 		log.Printf("attach %q [%s] — conf=%.2f llm=%v url=%s", detail.Name, dc.Name, res.Confidence, res.UsedLLM, res.Best.URL)
 		return s.attach(ctx, detail, item, res, dc, rec, base, nil)
 	case res.BestHTML != nil:
@@ -776,12 +776,22 @@ func (s *Scanner) attach(ctx context.Context, detail *homebox.EntityOut, item di
 				// remote sources instead — a phone browser passes the bot wall.
 				return s.linkManual(ctx, detail, res, dc, base)
 			}
-		} else if !skimAccepts(s.disc.Skim(ctx, item, data, dc.Name), best) {
+		} else if v := s.disc.Skim(ctx, item, data, dc.Name); !skimAccepts(v, best) {
 			// Official brand-domain docs skip the different-product veto
 			// (provenance beats a sparse-excerpt LLM read; observed
 			// false-negatives on image-heavy official manuals) but NOT the
 			// PDF-magic or wrong-class checks — an official parts list must
 			// still not attach as the manual.
+			if v.TextReason != "" {
+				s.event(ctx, detail, store.EvSkimUnreadable, dc.Name, best.URL,
+					"could not read document text: "+v.TextReason)
+			}
+			// R4: unreadable + non-official is inconclusive. Ask the human
+			// instead of attaching blind or dropping the candidate silently.
+			if unreadableNonOfficial(v, best) && base != nil {
+				log.Printf("review-gate %q [%s] — unreadable non-official doc (%s) %s", detail.Name, dc.Name, v.TextReason, best.URL)
+				return s.reviewGate(ctx, detail, res, base)
+			}
 			log.Printf("content skim rejected %q [%s] (%s); trying fallback candidates", detail.Name, dc.Name, best.URL)
 			s.event(ctx, detail, store.EvSkimVeto, dc.Name, best.URL, "content skim rejected; trying fallbacks")
 			best, data = s.downloadFallback(ctx, res, item, dc)
@@ -1015,6 +1025,12 @@ func (s *Scanner) downloadFallback(ctx context.Context, res *discovery.Result, i
 
 // skimAccepts is the attach veto: real PDF, right class, and (for non-official
 // sources) not positively a different product.
+//
+// R4: a document whose text could not be read is INCONCLUSIVE, not verified.
+// Provenance decides what that means — an official brand-domain or QR-linked
+// PDF still attaches (the source is the evidence), but an unreadable
+// aggregator/search result no longer gets the benefit of the doubt. Before
+// this, every extraction failure was a silent unverified attach.
 func skimAccepts(v discovery.SkimVerdict, c *discovery.Candidate) bool {
 	if !v.IsPDF || v.ClassMismatch {
 		return false
@@ -1022,8 +1038,30 @@ func skimAccepts(v discovery.SkimVerdict, c *discovery.Candidate) bool {
 	if !c.Official && v.ProductMismatch {
 		return false
 	}
+	if !v.HasText && !c.Official {
+		return false
+	}
 	return true
 }
+
+// unreadableNonOfficial reports the R4 case that must reach a human rather
+// than being attached or silently discarded.
+func unreadableNonOfficial(v discovery.SkimVerdict, c *discovery.Candidate) bool {
+	return v.IsPDF && !v.HasText && !c.Official && !v.ClassMismatch
+}
+
+// weakIdentity reports that the item lacks the model number every content
+// check keys off (skimPromote returns early without one, modelInText needs
+// >=4 chars). Such an item can otherwise reach auto-attach on rules + rerank
+// score alone — R6 caps that at link/review instead.
+func weakIdentity(it discovery.Item) bool {
+	return len(norm(it.ModelNumber)) < 4
+}
+
+// norm mirrors discovery's normalization for the identity check.
+func norm(s string) string { return nonAlnumSched.ReplaceAllString(strings.ToLower(s), "") }
+
+var nonAlnumSched = regexp.MustCompile(`[^a-z0-9]+`)
 
 // bestOfficialPDF returns the highest-scored official-domain PDF candidate.
 func bestOfficialPDF(cands []discovery.Candidate) *discovery.Candidate {

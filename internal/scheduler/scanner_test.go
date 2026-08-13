@@ -66,6 +66,7 @@ type fakeDisc struct {
 	body        []byte
 	discCalls   int
 	skimConfirm bool // Skim reports the model confirmed in document text
+	skimNoText  bool // Skim cannot read the document (scan / extractor failure)
 }
 
 func (d *fakeDisc) Discover(_ context.Context, _ discovery.Item, _ []string) (*discovery.Result, error) {
@@ -80,11 +81,15 @@ func (d *fakeDisc) SelectClass(_ context.Context, _ discovery.Item, _ []discover
 }
 func (d *fakeDisc) Download(_ context.Context, _ string, _ int64) ([]byte, error) { return d.body, nil }
 func (d *fakeDisc) Skim(_ context.Context, _ discovery.Item, data []byte, _ string) discovery.SkimVerdict {
-	return discovery.SkimVerdict{
+	v := discovery.SkimVerdict{
 		IsPDF:          len(data) >= 4 && string(data[:4]) == "%PDF",
-		HasText:        true,
-		ModelConfirmed: d.skimConfirm,
+		HasText:        !d.skimNoText,
+		ModelConfirmed: d.skimConfirm && !d.skimNoText,
 	}
+	if d.skimNoText {
+		v.TextReason = "no-text"
+	}
+	return v
 }
 
 type fakeNtfy struct{ sent int }
@@ -120,7 +125,7 @@ func detail(id, mfr, model string, atts ...homebox.Attachment) *homebox.EntityOu
 func TestAttachHighConfidence(t *testing.T) {
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
 	}
 	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/m.pdf", ModelMatch: true}, Confidence: 0.9}, body: []byte("%PDF-1.4")}
 	nt := &fakeNtfy{}
@@ -142,7 +147,7 @@ func TestAttachHighConfidence(t *testing.T) {
 func TestLowConfidenceReviewGate(t *testing.T) {
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
 	}
 	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/maybe.pdf"}, Confidence: 0.4}}
 	nt := &fakeNtfy{}
@@ -170,7 +175,7 @@ func TestLowConfidenceReviewGate(t *testing.T) {
 func TestSkipIfManualExists(t *testing.T) {
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1", homebox.Attachment{Type: "manual"})},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9", homebox.Attachment{Type: "manual"})},
 	}
 	disc := &fakeDisc{}
 	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
@@ -210,14 +215,18 @@ func TestNoSearchableIdentity(t *testing.T) {
 	}
 }
 
-func TestNameOnlySearches(t *testing.T) {
-	// name present, no mfr/model => still searches (subject = name).
+func TestNameOnlySearchesButNeverAutoAttaches(t *testing.T) {
+	// Name present, no mfr/model => still searched (subject = name), but R6
+	// caps a weak identity at review: with no model number nothing downstream
+	// can confirm the document belongs to this item, so a high rerank score
+	// alone must not attach.
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
 		details: map[string]*homebox.EntityOut{"e1": {ID: "e1", Name: "PlayStation Portal"}},
 	}
 	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/m.pdf"}, Confidence: 0.95}, body: []byte("%PDF")}
-	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	nt := &fakeNtfy{}
+	sc, st := newTestScanner(t, api, disc, nt)
 	defer st.Close()
 
 	if err := sc.Scan(context.Background(), false); err != nil {
@@ -226,8 +235,15 @@ func TestNameOnlySearches(t *testing.T) {
 	if disc.discCalls != 1 {
 		t.Fatalf("name-only item should be searched, discCalls=%d", disc.discCalls)
 	}
-	if api.uploads != 1 {
-		t.Fatalf("expected attach, uploads=%d", api.uploads)
+	if api.uploads != 0 {
+		t.Fatalf("weak identity must not auto-attach, uploads=%d", api.uploads)
+	}
+	if nt.sent != 1 {
+		t.Fatalf("expected a review prompt, sent=%d", nt.sent)
+	}
+	rec, _ := st.Get(context.Background(), "e1")
+	if rec.Status != store.StatusPendingReview {
+		t.Fatalf("expected pending_review, got %s", rec.Status)
 	}
 }
 
@@ -236,7 +252,7 @@ func TestDedupeSkipsReupload(t *testing.T) {
 	body := []byte("%PDF-1.4 identical")
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
 	}
 	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/m.pdf", ModelMatch: true}, Confidence: 0.9}, body: body}
 	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
@@ -313,7 +329,7 @@ func TestReviewGateNotifiesOnce(t *testing.T) {
 	ctx := context.Background()
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
 	}
 	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/maybe.pdf"}, Confidence: 0.4}}
 	nt := &fakeNtfy{}
@@ -377,7 +393,7 @@ func TestSkimPromotesGatedCandidate(t *testing.T) {
 func TestRejectedEventFiltersCandidate(t *testing.T) {
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
 	}
 	disc := &fakeDisc{res: &discovery.Result{Best: &discovery.Candidate{URL: "http://x/bad.pdf", ModelMatch: true}, Confidence: 0.9}, body: []byte("%PDF-1.4")}
 	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
@@ -397,7 +413,7 @@ func TestRejectedEventFiltersCandidate(t *testing.T) {
 func TestApproveEventFulfilled(t *testing.T) {
 	api := &fakeAPI{
 		list:    []homebox.EntitySummary{summary("e1")},
-		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "W-1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
 	}
 	disc := &fakeDisc{body: []byte("%PDF-1.4 approved doc")}
 	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
@@ -475,5 +491,67 @@ func TestSweepRemovalLogsRejection(t *testing.T) {
 	rec, _ := st.Get(ctx, "e1")
 	if rec.Status != store.StatusNew || rec.DocURL != "" {
 		t.Fatalf("removal must reset for retry, got %+v", rec)
+	}
+}
+
+func TestUnreadableNonOfficialReviewGates(t *testing.T) {
+	// R4: extraction failure is inconclusive, not verified. A non-official
+	// PDF we cannot read must reach a human instead of attaching silently.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res:  &discovery.Result{Best: &discovery.Candidate{URL: "http://aggregator/x.pdf", ModelMatch: true}, Confidence: 0.95},
+		body: []byte("%PDF-1.4"), skimNoText: true, // parses as PDF, yields no text
+	}
+	nt := &fakeNtfy{}
+	sc, st := newTestScanner(t, api, disc, nt)
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatalf("unreadable non-official doc must not attach, uploads=%d", api.uploads)
+	}
+	if nt.sent != 1 {
+		t.Fatalf("expected a review prompt, sent=%d", nt.sent)
+	}
+	evs, _ := st.Events(context.Background(), "e1", 20)
+	var sawUnreadable bool
+	for _, e := range evs {
+		if e.Kind == store.EvSkimUnreadable {
+			sawUnreadable = true
+		}
+	}
+	if !sawUnreadable {
+		t.Fatal("expected a skim.unreadable event recording why verification failed")
+	}
+}
+
+func TestUnreadableOfficialStillAttaches(t *testing.T) {
+	// Provenance carries an unreadable doc: an official brand-domain PDF is
+	// evidence in itself, so scanned/image-only official manuals still attach.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best:       &discovery.Candidate{URL: "http://acme.example/m.pdf", Official: true, IsPDF: true, ModelMatch: true},
+			Candidates: []discovery.Candidate{{URL: "http://acme.example/m.pdf", Official: true, IsPDF: true, Score: 5}},
+			Confidence: 0.95,
+		},
+		body: []byte("%PDF-1.4"), skimNoText: true,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("official unreadable doc should still attach, uploads=%d", api.uploads)
 	}
 }

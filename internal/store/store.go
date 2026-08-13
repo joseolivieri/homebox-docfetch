@@ -54,11 +54,17 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("create state dir %q: %w", dir, err)
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	// WAL + a busy timeout let the portal read (the /log pages and the
+	// post-create event feed poll every few seconds) while a scan pass holds
+	// the writer. Before D25 the scanner had the DB to itself and a single
+	// connection was fine; sharing the process made that a stall.
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // single writer; avoids SQLITE_BUSY under the scheduler
+	// One writer, several readers: modernc serializes writes internally, and
+	// WAL keeps readers off the writer's lock.
+	db.SetMaxOpenConns(4)
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()

@@ -103,3 +103,19 @@ func TestPlatformPagesNeverWebLinkOrBrandSeed(t *testing.T) {
 		t.Fatal("real support page wrongly flagged")
 	}
 }
+
+func TestIntermediaryHostsNeverBecomeBrandDomains(t *testing.T) {
+	for _, u := range []string{
+		"https://scantrust.io/r/abc123",
+		"https://app.securikett.com/c/xyz",
+		"https://bit.ly/3xYz",
+		"https://linktr.ee/acme",
+	} {
+		if !isIntermediaryHost(u) {
+			t.Fatalf("intermediary not flagged: %s", u)
+		}
+	}
+	if isIntermediaryHost("https://support.acme.example/manuals/wt41") {
+		t.Fatal("real brand support host wrongly flagged as intermediary")
+	}
+}

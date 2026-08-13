@@ -46,6 +46,7 @@ const (
 	EvEnrichOverride = "enrich.override" // user corrected a machine-written value; never refilled
 	EvNotFound       = "notfound"        // a class search ended empty this pass (Class says which)
 	EvSkimVeto       = "skim.veto"       // content skim rejected a downloaded candidate
+	EvSkimUnreadable = "skim.unreadable" // text extraction produced nothing (Detail carries why)
 	EvError          = "error"
 )
 
