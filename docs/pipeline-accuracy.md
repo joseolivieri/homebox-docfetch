@@ -1,7 +1,9 @@
 # Pipeline accuracy — current design, assessed recommendations, backlog
 
-Status: **working document** (iterate here; promote agreed items to D-rows in
-`docs/decisions.md` and milestones in `docs/plan-architecture-v2.md`).
+Status: **tier A shipped** (2026-08-13) — rows marked ✅ are implemented and
+tested; see `docs/architecture-review.md` for the consolidated priority of what
+remains. Promote agreed items to D-rows in `docs/decisions.md` and milestones in
+`docs/plan-architecture-v2.md`.
 Scope: how docfetch decides what to attach, where that decision is weak, and
 what to change — ranked by value per unit of cost, no new hardware assumed.
 
@@ -99,10 +101,10 @@ Four fields. That struct — plus the doc class being fetched — is the entire
 input to query construction, candidate scoring, model-match gating,
 `skimPromote`, the photo subject, and the warranty subject.
 
-### 1.4 Information dropped at the boundary (two real gaps)
+### 1.4 Information dropped at the boundary (both fixed — A6b/A6c)
 
-Comparing §1.2 with §1.3 surfaces two signals that are produced and then
-thrown away:
+Comparing §1.2 with §1.3 surfaced two signals that were produced and thrown
+away. Both are now persisted as facts and consumed:
 
 - **`confidence` is discarded entirely** — never persisted, never shown to the
   user, never gates anything (`grep Confidence internal/portal/intake.go`
@@ -286,14 +288,14 @@ image, and we will know whether extraction failure is a 5% or a 40% problem.
 
 | # | Change | Cost | Risk | Gate |
 |---|---|---|---|---|
-| **A1** | R3 widen scan window (first 6 + last 3 pages) | ~0 | none | ships now |
-| **A2** | R8 `skim.unreadable` event + extraction-reason logging | ~0 | none | ships now |
-| **A3** | R4 provenance-aware handling of unreadable PDFs | ~0 | low | ships now |
-| **A4** | R6 weak-identity cap (no auto-attach without model evidence) | ~0 | low | ships now |
-| **A5** | R7 verify the image-search photo winner | 1 vision call/photo | low | ships now |
-| **A6** | §5.4 verbatim evidence strings per extracted field + confirm-screen hints | prompt/schema only | none | ships now |
-| **A6b** | §1.4 persist the vision `confidence` map and feed it to R6's weak-identity gate (currently discarded) | ~0 | none | ships now |
-| **A6c** | §1.4 wire `sticker.productType` into the category gate and photo subject (currently dead data) | ~0 | low | ships now |
+| **A1** ✅ | R3 widen scan window (first 6 + last 3 pages) | ~0 | none | ships now |
+| **A2** ✅ | R8 `skim.unreadable` event + extraction-reason logging | ~0 | none | ships now |
+| **A3** ✅ | R4 provenance-aware handling of unreadable PDFs | ~0 | low | ships now |
+| **A4** ✅ | R6 weak-identity cap (no auto-attach without model evidence) | ~0 | low | ships now |
+| **A5** ✅ | R7 verify the image-search photo winner | 1 vision call/photo | low | ships now |
+| **A6** ✅ | §5.4 verbatim evidence strings per extracted field + confirm-screen hints | prompt/schema only | none | ships now |
+| **A6b** ✅ | §1.4 persist the vision `confidence` map and feed it to R6's weak-identity gate (currently discarded) | ~0 | none | ships now |
+| **A6c** ✅ | §1.4 wire `sticker.productType` into the category gate and photo subject (currently dead data) | ~0 | low | ships now |
 | **B0** | §5.3 `bench-vision` harness + vision-model bake-off | ~½ session | none (offline) | before B1 |
 | **B1** | R5 golden-set replay harness (learning Phase B) | ~1 session | none (offline) | before B2 |
 | **B2** | R1 `pdftotext` optional extractor + image base change | image +40–60MB, dev dep, D-row | medium | after A2 data + B1 baseline |
@@ -795,8 +797,8 @@ still paste the product page they had open.
 
 | # | Change | Cost |
 |---|---|---|
-| **A10** | "Skip photos — enter manually" button → `#/confirm` blank (form already works standalone) | ~0, one button |
-| **A10b** | Product-page URL field → `lead.url` event read into `HintURLs`; manual-URL field → `doc.approve` (both paths already exist) | ~0 |
+| **A10** ✅ | "Skip photos — enter manually" button → `#/confirm` blank (form already works standalone) | ~0, one button |
+| **A10b** ✅ | Product-page URL field → `lead.url` event read into `HintURLs`; manual-URL field → `doc.approve` (both paths already exist) | ~0 |
 | **A10c** | Paste box (free text) parsed into the same fields | small |
 | **A11** | Typed PDF drop; user-declared class; attach manual/receipt/warranty directly | small |
 | **B7** | PDF text read for purchase/warranty fields (rides B2's extractor) | small after B2 |
@@ -807,11 +809,11 @@ still paste the product page they had open.
 
 | # | Change | Cost |
 |---|---|---|
-| **A6d** | §6.6 `facts` table + write GTIN / FCC ID / product type / field confidence into it | ~0, one migration |
-| **A7** | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event — **prerequisite for §7's resolver fast path** | ~0 |
-| **A8** | QR payload classifier + GS1 AI parser (Digital Link / element string / Transparency SGTIN → GTIN + serial); stop chasing non-support payloads | ~0, ~50 lines |
-| **A8b** | Intermediary-host guard: never seed the brand cache from brand-protection resolver domains (latent poisoning bug, same class as the YouTube fix) | ~0 |
-| **A9** | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
+| **A6d** ✅ | §6.6 `facts` table + write GTIN / FCC ID / product type / field confidence into it | ~0, one migration |
+| **A7** ✅ | Barcode + DataMatrix decode alongside QR (all photos, existing lib) + `intake.observed` event — **prerequisite for §7's resolver fast path** | ~0 |
+| **A8** ✅ | QR payload classifier + GS1 AI parser (Digital Link / element string / Transparency SGTIN → GTIN + serial); stop chasing non-support payloads | ~0, ~50 lines |
+| **A8b** ✅ | Intermediary-host guard: never seed the brand cache from brand-protection resolver domains (latent poisoning bug, same class as the YouTube fix) | ~0 |
+| **A9** ❌ cut (review M6: no consumer) | FCC ID + origin country as vision schema fields (rides A6's evidence work) | prompt only |
 | **B3** | Extra-photo UI + filesystem staging with TTL (kills double upload, feeds B0's corpus) | ~½ session |
 | **C2** | GTIN/FCC/Matter → **resolver** lookups — see §7, which supersedes this row | new source + interface work |
 | **C3** | Matter setup-code parsing (vendor/product ID) + certification marks as inventory metadata | prompt + fields |
