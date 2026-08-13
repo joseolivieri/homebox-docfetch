@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,12 +17,13 @@ import (
 // --- fakes ---
 
 type fakeAPI struct {
-	list     []homebox.EntitySummary
-	details  map[string]*homebox.EntityOut
-	uploads  int
-	patches  int
-	puts     int
-	lastTags []string
+	list       []homebox.EntitySummary
+	details    map[string]*homebox.EntityOut
+	uploads    int
+	patches    int
+	puts       int
+	lastTags   []string
+	lastFields []homebox.EntityField
 }
 
 func (f *fakeAPI) ListEntities(_ context.Context, page, pageSize int, tagIDs []string) (*homebox.EntityListResult, error) {
@@ -41,6 +43,7 @@ func (f *fakeAPI) PatchEntity(_ context.Context, id string, in homebox.EntityUpd
 func (f *fakeAPI) PutEntity(_ context.Context, id string, in homebox.EntityUpdate) (*homebox.EntityOut, error) {
 	f.puts++
 	f.lastTags = in.TagIDs
+	f.lastFields = in.Fields
 	d := f.details[id]
 	if in.Manufacturer != nil {
 		d.Manufacturer = *in.Manufacturer
@@ -527,6 +530,70 @@ func TestUnreadableNonOfficialReviewGates(t *testing.T) {
 	}
 	if !sawUnreadable {
 		t.Fatal("expected a skim.unreadable event recording why verification failed")
+	}
+}
+
+func TestOfficialPageBeatsThirdPartyPDF(t *testing.T) {
+	// A maker that ships no PDF leaves only third-party copies, and a copy of
+	// the RIGHT product skims clean — content verification cannot separate it
+	// from the real thing. Provenance can: link the maker's own page instead.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best: &discovery.Candidate{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true},
+			Candidates: []discovery.Candidate{
+				{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true, Score: 6},
+				{URL: "http://acme.example/products/wt41x9", Official: true, IsHTML: true, ModelMatch: true, Score: 1},
+			},
+			Confidence: 0.95,
+		},
+		body: []byte("%PDF-1.4 WT41X9 installation guide"), skimConfirm: true,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 0 {
+		t.Fatalf("a third-party copy must not attach when the maker has a page, uploads=%d", api.uploads)
+	}
+	got := homebox.FieldValue(api.lastFields, "Manual (web)")
+	if !strings.Contains(got, "acme.example/products/wt41x9") {
+		t.Fatalf("expected the official page linked, got %q", got)
+	}
+}
+
+func TestOfficialPDFStillBeatsOfficialPage(t *testing.T) {
+	// The page preference is a fallback for makers that publish no file, not a
+	// change of format policy: an official PDF still wins outright.
+	api := &fakeAPI{
+		list:    []homebox.EntitySummary{summary("e1")},
+		details: map[string]*homebox.EntityOut{"e1": detail("e1", "Acme", "WT41X9")},
+	}
+	disc := &fakeDisc{
+		res: &discovery.Result{
+			Best: &discovery.Candidate{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true},
+			Candidates: []discovery.Candidate{
+				{URL: "http://reseller.example.au/wt41x9.pdf", IsPDF: true, ModelMatch: true, Score: 6},
+				{URL: "http://acme.example/docs/d-102.pdf", Official: true, IsPDF: true, Score: 3},
+				{URL: "http://acme.example/products/wt41x9", Official: true, IsHTML: true, ModelMatch: true, Score: 1},
+			},
+			Confidence: 0.95,
+		},
+		body: []byte("%PDF-1.4 WT41X9 owner's manual"), skimConfirm: true,
+	}
+	sc, st := newTestScanner(t, api, disc, &fakeNtfy{})
+	defer st.Close()
+
+	if err := sc.Scan(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if api.uploads != 1 {
+		t.Fatalf("official PDF should attach, uploads=%d", api.uploads)
 	}
 }
 

@@ -392,6 +392,13 @@ func (s *Scanner) resolveManual(ctx context.Context, detail *homebox.EntityOut, 
 		res.Best, res.Confidence = cand, skimConfidence
 		return s.attach(ctx, detail, item, res, dc, rec, base, data)
 	}
+	if oh := preferOfficialPage(res); oh != nil {
+		log.Printf("official-page %q [%s] — no official PDF exists; linking the maker's own page over %s",
+			detail.Name, dc.Name, nonOfficialURL(res))
+		s.event(ctx, detail, store.EvDocReject, dc.Name, nonOfficialURL(res), "third-party copy — official page preferred")
+		res.BestHTML = oh
+		return s.linkManual(ctx, detail, res, dc, base)
+	}
 	switch {
 	case res.Best != nil && !res.Best.IsHTML && res.Confidence >= s.cfg.AutoAttachThreshold && !weakIdentity(item):
 		log.Printf("attach %q [%s] — conf=%.2f llm=%v url=%s", detail.Name, dc.Name, res.Confidence, res.UsedLLM, res.Best.URL)
@@ -433,6 +440,13 @@ func (s *Scanner) fetchSecondary(ctx context.Context, detail *homebox.EntityOut,
 		res.Best, res.Confidence = cand, skimConfidence
 		if err := s.attach(ctx, detail, item, res, dc, nil, nil, data); err != nil {
 			log.Printf("secondary attach %q [%s]: %v", detail.Name, dc.Name, err)
+		}
+		return
+	}
+	if oh := preferOfficialPage(res); oh != nil {
+		res.BestHTML = oh
+		if err := s.linkManual(ctx, detail, res, dc, nil); err != nil {
+			log.Printf("secondary link %q [%s]: %v", detail.Name, dc.Name, err)
 		}
 		return
 	}
@@ -1079,6 +1093,56 @@ func bestOfficialPDF(cands []discovery.Candidate) *discovery.Candidate {
 		}
 	}
 	return best
+}
+
+// bestOfficialHTML returns the highest-scored official-domain page that the
+// pipeline matched to this model. ModelMatch is required: a brand's generic
+// support landing page is not worth preferring over a real document.
+func bestOfficialHTML(cands []discovery.Candidate) *discovery.Candidate {
+	var best *discovery.Candidate
+	for i := range cands {
+		c := &cands[i]
+		if !c.Official || !c.IsHTML || !c.ModelMatch {
+			continue
+		}
+		if best == nil || c.Score > best.Score {
+			best = c
+		}
+	}
+	return best
+}
+
+// preferOfficialPage reports the official page to link INSTEAD of a
+// third-party file, or nil to let the normal ladder run.
+//
+// Provenance outranks format. When a manufacturer publishes no PDF for a
+// product — common for network and computer hardware, where the authoritative
+// artifact is a web page — every PDF that exists is somebody else's copy. Those
+// copies pass content skimming precisely because they carry the right
+// product's content, so no amount of reading the bytes can tell them from the
+// real thing (observed live: a USW-Flex-2.5G-5 "manual" was an Australian
+// reseller's HTML-to-PDF conversion of Ubiquiti's own page). The maker's page
+// is the better answer, and it is the one signal a rehost cannot fake.
+//
+// Only fires when the pick is non-official: an official PDF still wins, and
+// officialFirst has already had its turn by the time this is called.
+func preferOfficialPage(res *discovery.Result) *discovery.Candidate {
+	if res.Best != nil && res.Best.Official {
+		return nil
+	}
+	if bestOfficialPDF(res.Candidates) != nil {
+		return nil // an official file exists; prefer it over a page
+	}
+	return bestOfficialHTML(res.Candidates)
+}
+
+// nonOfficialURL names the candidate that preferOfficialPage displaced, for
+// the ledger. Empty when nothing was displaced.
+func nonOfficialURL(res *discovery.Result) string {
+	if res.Best != nil && !res.Best.Official {
+		return res.Best.URL
+	}
+	return ""
 }
 
 // hasDoc reports whether a doc class is already present: a custom field (set
